@@ -1,0 +1,125 @@
+// this bit is just plain Jenkins Groovy
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+def randomUUID = "${UUID.randomUUID().toString()}"
+def randomLabel = "jenkins-worker-${randomUUID}"
+def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
+def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+
+def sharedSteps() {
+  // load EP Groovy Library
+  eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+  buildlib = load "cloudops-for-kubernetes/lib/buildlib.groovy"
+
+  eplib.loginToCloud()
+  eplib.loginToDockerRegistry()
+}
+
+// this is a workaround until this bug is fixed: https://issues.jenkins-ci.org/browse/JENKINS-56943
+def podYamlFromFile = new File("${env.JENKINS_HOME}/workspace/build-deployment-package@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/maven-8gb-2core-1container.yaml").text.trim();
+String podYaml = podYamlFromFile.replace('${dockerRegistryAddress}', "${dockerRegistryAddress}").replace('${jenkinsAgentImageTag}', "${jenkinsAgentImageTag}")
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent {
+    kubernetes {
+      label "${randomLabel}"
+      defaultContainer "jnlp"
+      yaml "${podYaml}"
+    }
+  }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
+    timeout(time: 5, unit: 'HOURS')
+  }
+  stages {
+    stage('Load EP Groovy Library') {
+      steps {
+        container('maven') {
+          script {
+            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+          }
+        }
+      }
+    }
+    stage('Checkout code') {
+      steps {
+        container('maven') {
+          dir ('ep-commerce') {
+            script {
+              eplib.gitShallowClone("${params.epCommerceRepoURL}", "${params.epCommerceBranch}", "${params.epCommerceCredentialId}")
+            }
+          }
+        }
+      }
+    }
+    stage('Checkout cloudops code') {
+      steps {
+        container('maven') {
+          dir ('cloudops-for-kubernetes') {
+            script {
+              eplib.gitShallowClone("${params.cloudOpsForKubernetesRepoURL}", "${params.cloudOpsForKubernetesBranch}", "${params.epCommerceCredentialId}")
+            }
+          }
+        }
+      }
+    }
+    stage('Configure Maven') {
+      steps {
+        container('maven') {
+          sh """
+          mkdir -p ~/.m2/
+          cp ep-commerce/devops/maven/ci-settings.xml ~/.m2/settings.xml
+
+          echo "replacing following strings in maven settings with real values: MAVEN_DEPLOYER_USER_NAME, MAVEN_DEPLOYER_PASSWORD, PROJECT_REPOSITORY_GROUP_URL, PROJECT_RELEASE_REPOSITORY_URL and PROJECT_SNAPSHOT_REPOSITORY_URL"
+          sed -i "s/MAVEN_DEPLOYER_USER_NAME/${nexusRepoUsername}/g" ~/.m2/settings.xml
+          sed -i "s/MAVEN_DEPLOYER_PASSWORD/${nexusRepoPassword}/g" ~/.m2/settings.xml
+          sed -i "s|PROJECT_NEXUS_BASE_URI|${nexusBaseUri}|g" ~/.m2/settings.xml
+          sed -i "s|PROJECT_REPOSITORY_GROUP_URL|${nexusBaseUri}/nexus/content/groups/ep-repository-group/|g" ~/.m2/settings.xml
+          sed -i "s|PROJECT_RELEASE_REPOSITORY_URL|${nexusBaseUri}/nexus/content/repositories/ep-releases/|g" ~/.m2/settings.xml
+          sed -i "s|PROJECT_SNAPSHOT_REPOSITORY_URL|${nexusBaseUri}/nexus/content/repositories/ep-snapshots/|g" ~/.m2/settings.xml
+          """
+        }
+      }
+    }
+    stage('Setting the ep-commerce version') {
+      steps {
+        container('maven') {
+          sh """
+          cd ep-commerce
+          epCommerceVersion=\$(xmlstarlet sel -N ns=http://maven.apache.org/POM/4.0.0 -t -m ns:project -v ns:version commerce-engine/pom.xml | sed 's/-SNAPSHOT//g')
+
+          cleanedEpCommerceBranch=\$(echo "${params.epCommerceBranch}" | tr '/.-' '_')
+          epCommercePlatformAndExtensionVersion="\${epCommerceVersion}.\${cleanedEpCommerceBranch}_\$(uuid | tr -d '-')"
+
+          xmlstarlet ed -P -L -N ns=http://maven.apache.org/POM/4.0.0 -a '/ns:project/ns:artifactId' -t elem -n 'version' -v "\${epCommercePlatformAndExtensionVersion}" extensions/packager/ext-deployment-package/pom.xml
+
+          echo "{ \\"epCommercePlatformAndExtensionVersion\\": \\"\${epCommercePlatformAndExtensionVersion}\\" }" > ../output.json
+          """
+        }
+      }
+    }
+    stage('Run tests') {
+      steps {
+        script {
+          try {
+            stage('Run Tests') {
+              container('maven') {
+                sh """
+                  chmod +x ./cloudops-for-kubernetes/jenkins/jobs/run-select-commerce-tests/RunSelectedTests.sh
+                  ./cloudops-for-kubernetes/jenkins/jobs/run-select-commerce-tests/RunSelectedTests.sh ''
+                """
+              }
+            }
+          }
+          finally {
+            stage('Publish JUnit test result reports') {
+              junit(allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml, **/target/failsafe-reports/*.xml')
+            }
+          }
+        }
+      }
+    }
+  }
+}

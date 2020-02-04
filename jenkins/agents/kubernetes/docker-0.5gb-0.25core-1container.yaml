@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: jnlp
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "200m"
+      limits:
+        memory: "512Mi"
+        cpu: "200m"
+  - name: docker1
+    image: ${dockerRegistryAddress}/jenkins/docker-agent:${jenkinsAgentImageTag}
+    imagePullPolicy: "Always"
+    command:
+    - cat
+    tty: true
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "512Mi"
+        cpu: "250m"
+    volumeMounts:
+    - name: jenkins-secrets-volume
+      mountPath: /jenkins-secrets
+  dnsConfig:
+    options:
+      - name: single-request-reopen
+      - name: timeout
+        value: "3"
+      - name: attempts
+        value: "3"
+  volumes:
+  - name: jenkins-secrets-volume
+    secret:
+      secretName: jenkins-secrets

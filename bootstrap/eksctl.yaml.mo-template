@@ -1,0 +1,41 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: "{{TF_VAR_kubernetes_cluster_name}}"
+  region: "{{TF_VAR_aws_region}}"
+  version: "{{TF_VAR_kubernetes_version}}"
+
+{{#aws_region_us_east_1}}
+availabilityZones: ["us-east-1a","us-east-1b"]
+{{/aws_region_us_east_1}}
+
+nodeGroups:
+- name: "ng-1"
+  instanceType: "{{aws_eks_instance_type}}"
+  minSize: {{aws_eks_min_node_count}}
+  maxSize: 100
+  privateNetworking: true
+  ssh:
+    publicKey: "{{aws_eks_ssh_key}}"
+  labels:
+    created-by: "Elastic-Path-CloudOps-for-Kubernetes-bootstrap"
+  iam:
+    withAddonPolicies:
+      autoScaler: true
+      imageBuilder: true
+      ebs: true
+      cloudWatch: true
+  kubeletExtraConfig:
+    kubeReserved:
+      cpu: "150m"
+      memory: "300Mi"
+      ephemeral-storage: "1Gi"
+    kubeReservedCgroup: "/kube-reserved"
+    systemReserved:
+      cpu: "150m"
+      memory: "300Mi"
+      ephemeral-storage: "3Gi"
+    evictionHard:
+      memory.available:  "200Mi"
+      nodefs.available: "10%"

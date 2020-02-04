@@ -1,0 +1,200 @@
+// this bit is just plain Jenkins Groovy
+
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+
+// define the build agent
+def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
+def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+def podYamlFromFile = new File("${env.JENKINS_HOME}/workspace/build-docker-images-account-management@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/docker-1gb-1core-1container.yaml").text.trim();
+String podYaml = podYamlFromFile.replace('${dockerRegistryAddress}', "${dockerRegistryAddress}").replace('${jenkinsAgentImageTag}', "${jenkinsAgentImageTag}")
+
+// placeholder for AM release version hash
+accountManagementReleaseVersionHash = "";
+
+// get nexus credentials
+def epRepositoryUser = new File(secretsDirectory, "epRepositoryUser").text.trim();
+def epRepositoryPassword = new File(secretsDirectory, "epRepositoryPassword").text.trim();
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent none
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
+    timestamps ()
+  }
+  stages {
+    stage('Validate job parameters') {
+      agent {
+        kubernetes { label "docker" defaultContainer "jnlp" yaml "${podYaml}" }
+      }
+      steps {
+        container('docker1') {
+          script {
+            def imageTag = "${params.imageTag}".trim()
+            if(! imageTag) throw new Exception("imageTag parameter must be set")
+            if(imageTag.contains("/")) throw new Exception("imageTag parameter must not have slashes")
+          }
+        }
+      }
+    }
+    stage('Stash Account Management Release Package Files') {
+      agent {
+        kubernetes { label "docker" defaultContainer "jnlp" yaml "${podYaml}" }
+      }
+      steps {
+        container('docker1') {
+          script {
+            sh(label: 'Download release package', script: """
+              set +x
+              echo -n "machine repository.elasticpath.com login ${epRepositoryUser} password ${epRepositoryPassword}\n" > /root/.netrc
+              set -x
+              chmod 600 /root/.netrc
+
+              # Download the Account Management Release Package
+              aria2c --enable-color=false --netrc-path="/root/.netrc" --summary-interval=0 "${releasePackageUrl}" -o release-package.zip
+
+              # Unzip the release package and move it to a directory with a know naming convention
+              unzip release-package.zip -d uncompressed-am-release-package
+              mkdir am-release-package-files/
+              mv uncompressed-am-release-package/account-management-*/* am-release-package-files/
+              rmdir uncompressed-am-release-package/account-management-* uncompressed-am-release-package
+              md5sum release-package.zip > md5.txt
+              date --utc +%Y%m%d_%H%M%SZ > timestamp.txt
+            """)
+          }
+          stash includes: "am-release-package-files/account-management-api/**", name: "am-api"
+          stash includes: "am-release-package-files/account-management-app/**", name: "am-ui"
+          stash includes: "am-release-package-files/local-deployment/am-config/**", name: "am-config"
+          stash includes: "md5.txt", name: "md5.txt"
+          stash includes: "timestamp.txt", name: "timestamp.txt"
+        }
+      }
+    }
+    stage('Build Docker images') {
+      parallel {
+        stage('Build the API image') {
+          agent {
+            kubernetes { label "docker" defaultContainer "jnlp" yaml "${podYaml}" }
+          }
+          stages {
+            stage('Build the API image') {
+              steps {
+                container('docker1') {
+                  unstash "am-api"
+                  unstash "md5.txt"
+                  unstash "timestamp.txt"
+                  script {
+                    eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+                    eplib.loginToCloud()
+                    eplib.loginToDockerRegistry()
+
+                    def accountManagementReleaseVersionHash = readFile('md5.txt').trim()
+                    accountManagementReleaseVersionHash = accountManagementReleaseVersionHash.split(' ')[0]
+                    def currentTimeStamp = readFile('timestamp.txt').trim()
+
+                    sh(label: 'Build and push the Account Management api image', script: """
+                      cd am-release-package-files/account-management-api/
+
+                      # build the image
+                      img build \
+                        -t ${dockerRegistryAddress}/am/am-api:${params.imageTag} \
+                        -f ./Dockerfile \
+                        --label "com.elasticpath.am.package.hash=${accountManagementReleaseVersionHash}" \
+                        --label "org.opencontainers.image.created=${currentTimeStamp}" \
+                        ./
+
+                      # push the image
+                      img push ${dockerRegistryAddress}/am/am-api:${params.imageTag}
+                    """)
+                  }
+                }
+              }
+            }
+          }
+        }
+        stage('Build the UI image') {
+          agent {
+            kubernetes { label "docker" defaultContainer "jnlp" yaml "${podYaml}" }
+          }
+          stages {
+            stage('Build the UI image') {
+              steps {
+                container('docker1') {
+                  unstash "am-ui"
+                  unstash "md5.txt"
+                  unstash "timestamp.txt"
+                  script {
+                    eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+                    eplib.loginToCloud()
+                    eplib.loginToDockerRegistry()
+
+                    def accountManagementReleaseVersionHash = readFile('md5.txt').trim()
+                    accountManagementReleaseVersionHash = accountManagementReleaseVersionHash.split(' ')[0]
+                    def currentTimeStamp = readFile('timestamp.txt').trim()
+
+                    sh(label: 'Build and push the Account Management ui image', script: """
+                      cd am-release-package-files/account-management-app/
+
+                      # build the image
+                      img build \
+                        -t ${dockerRegistryAddress}/am/am-ui:${params.imageTag} \
+                        -f ./Dockerfile \
+                        --label "com.elasticpath.am.package.hash=${accountManagementReleaseVersionHash}" \
+                        --label "org.opencontainers.image.created=${currentTimeStamp}" \
+                        ./
+
+                      # push the image
+                      img push ${dockerRegistryAddress}/am/am-ui:${params.imageTag}
+                    """)
+                  }
+                }
+              }
+            }
+          }
+        }
+        stage('Build the config image') {
+          agent {
+            kubernetes { label "docker" defaultContainer "jnlp" yaml "${podYaml}" }
+          }
+          stages {
+            stage('Build the config image') {
+              steps {
+                container('docker1') {
+                  unstash "am-config"
+                  unstash "md5.txt"
+                  unstash "timestamp.txt"
+                  script {
+                    eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+                    eplib.loginToCloud()
+                    eplib.loginToDockerRegistry()
+
+                    def accountManagementReleaseVersionHash = readFile('md5.txt').trim()
+                    accountManagementReleaseVersionHash = accountManagementReleaseVersionHash.split(' ')[0]
+                    def currentTimeStamp = readFile('timestamp.txt').trim()
+
+                    sh(label: 'Build and push the Account Management config image', script: """
+                      cd am-release-package-files/local-deployment/am-config/
+
+                      # build the image
+                      img build \
+                        -t ${dockerRegistryAddress}/am/am-config:${params.imageTag} \
+                        -f ./Dockerfile \
+                        --label "com.elasticpath.am.package.hash=${accountManagementReleaseVersionHash}" \
+                        --label "org.opencontainers.image.created=${currentTimeStamp}" \
+                        ./
+
+                      # push the image
+                      img push ${dockerRegistryAddress}/am/am-config:${params.imageTag}
+                    """)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

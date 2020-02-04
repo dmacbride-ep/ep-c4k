@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: data-pop-tool-{{UUID}}
+spec:
+  ttlSecondsAfterFinished: 60
+  backoffLimit: 0
+  template:
+    spec:
+      containers:
+      - name: data-pop-tool-{{UUID}}
+        image: "{{REGISTRY_ADDRESS}}/ep/data-pop-tool:{{DOCKER_IMAGE_TAG}}"
+        imagePullPolicy: Always
+        envFrom:
+        - secretRef:
+            name: ep-jms-{{JMS_NAME}}-secret
+        - secretRef:
+            name: {{DATABASE_SECRET}}
+        env:
+        - name: EP_DATA_POP_TOOL_CMD
+          value: {{EP_DATA_POP_TOOL_CMD}}
+        - name: EP_COMMERCE_ENVNAME
+          value: {{EP_COMMERCE_ENVNAME}}
+        - name: EP_DB_DEFAULT_TABLESPACE
+          value: ""
+        - name: EP_DB_TEMPORARY_TABLESPACE
+          value: ""
+        - name: EP_JMS_ENDPOINT_URI
+          value: "jms://topic:VirtualTopic.ep.domain"
+        - name: EP_JMS_CONNECTIONS
+          value: "25"
+        - name: EP_JMS_MAX_SESSIONS
+          value: "25"
+        - name: EP_JMS_TIMEOUT
+          value: "10000"
+      dnsConfig:
+        options:
+          - name: single-request-reopen
+          - name: timeout
+            value: "3"
+          - name: attempts
+            value: "3"
+      restartPolicy: Never

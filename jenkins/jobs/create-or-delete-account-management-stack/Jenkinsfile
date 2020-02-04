@@ -1,0 +1,230 @@
+// this bit is just plain Jenkins Groovy
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+def randomLabel = "jenkins-worker-${UUID.randomUUID().toString()}"
+
+// define the build agent
+def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
+def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+def podYamlFromFile = new File("${env.JENKINS_HOME}/workspace/create-or-delete-account-management-stack@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/docker-1gb-0.25core-1container.yaml").text.trim();
+String podYaml = podYamlFromFile.replace('${dockerRegistryAddress}', "${dockerRegistryAddress}").replace('${jenkinsAgentImageTag}', "${jenkinsAgentImageTag}")
+
+// get the EP Groovy library
+def cloudOpsForKubernetesRepoURL = new File(secretsDirectory, "cloudOpsForKubernetesRepoURL").text.trim();
+def cloudOpsForKubernetesDefaultBranch = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim();
+def cloudOpsForKubernetesCredentialId = "gitCredentialId";
+
+// get the root domain name of the deployments
+def rootDomainName = new File(secretsDirectory, "domainName").text.trim();
+
+import groovy.json.JsonOutput
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent {
+    kubernetes {
+      label "docker-${randomLabel}"
+      defaultContainer "jnlp"
+      yaml "${podYaml}"
+    }
+  }
+  environment {
+    TF_IN_AUTOMATION = "true"
+    TF_CLI_ARGS = "-no-color"
+    TF_CLI_ARGS_apply = "-input=false"
+    TF_CLI_ARGS_destroy = "-input=false"
+    TF_CLI_ARGS_plan = "-input=false"
+  }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
+    timeout(time: 40, unit: 'MINUTES')
+  }
+  stages {
+    stage('Validate job parameters') {
+      steps {
+        container('docker1') {
+          script {
+            // validate the private JWT key
+            labelledShell(label: 'Validate private JWT key', script: """#!/bin/bash +x
+              echo "${params.TF_VAR_private_jwt_key}" | base64 -d | openssl pkcs8 -nocrypt -inform DER -out /dev/null
+            """)
+            if ( "${params.TF_VAR_api_access_token}".trim() &&
+                 "${params.TF_VAR_api_access_token}".length() < 32 ) {
+              error "TF_VAR_api_access_token must contain at least 32 characters"
+            }
+            if ( ! "${params.TF_VAR_kubernetes_namespace}".trim()) {
+              error "TF_VAR_kubernetes_namespace must not be empty"
+            }
+            if ( ! "${params.TF_VAR_docker_tag}".trim()) {
+              error "TF_VAR_docker_tag parameter must not be empty"
+            }
+            if ( ! "${params.TF_VAR_kubernetes_cluster_name}".trim()) {
+              error "TF_VAR_kubernetes_cluster_name must not be empty"
+            }
+            if ( ! ("${params.TF_VAR_account_management_database_name}" ==~ "^[a-zA-Z]+[\\w]+\$")) {
+              error "TF_VAR_account_management_database_name must start with a letter and must be alphanumeric"
+            }
+            if ( ! ("${params.TF_VAR_account_management_activemq_name}" ==~ "^[a-zA-Z]+[\\w]+\$")) {
+              error "TF_VAR_account_management_activemq_name must start with a letter and must be alphanumeric"
+            }
+            if ( ! params.TF_VAR_include_keycloak ) {
+              if ( ! "${params.TF_VAR_oidc_discovery_url}".trim()) {
+                error "TF_VAR_oidc_discovery_url must not be empty if TF_VAR_include_keycloak is unset"
+              }
+              if ( ! "${params.TF_VAR_oidc_client_id}".trim()) {
+                error "TF_VAR_oidc_client_id must not be empty if TF_VAR_include_keycloak is unset"
+              }
+              if ( ! "${params.TF_VAR_oidc_client_secret}".trim()) {
+                error "TF_VAR_oidc_client_secret must not be empty if TF_VAR_include_keycloak is unset"
+              }
+              if ( ! "${params.TF_VAR_oidc_token_scope}".trim()) {
+                error "TF_VAR_oidc_token_scope must not be empty if TF_VAR_include_keycloak is unset"
+              }
+              if ( ! "${params.TF_VAR_oidc_group_key}".trim()) {
+                error "TF_VAR_oidc_group_key must not be empty if TF_VAR_include_keycloak is unset"
+              }
+              if ( ! "${params.TF_VAR_oidc_group_value_for_associates}".trim()) {
+                error "TF_VAR_oidc_group_value_for_associates must not be empty if TF_VAR_include_keycloak is unset"
+              }
+              if ( ! "${params.TF_VAR_oidc_group_value_for_seller_users}".trim()) {
+                error "TF_VAR_oidc_group_value_for_seller_users must not be empty if TF_VAR_include_keycloak is unset"
+              }
+            }
+            else {
+              if ( ! ("${params.TF_VAR_keycloak_database_name}" ==~ "^[a-zA-Z]+[\\w]+\$")) {
+                error "TF_VAR_keycloak_database_name must start with a letter and must be alphanumeric"
+              }
+            }
+          }
+        }
+      }
+    }
+    stage('Configure Terraform backend') {
+      steps {
+        container('docker1') {
+          script {
+            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+
+            eplib.loginToCloud()
+            eplib.loginToKubernetesCluster("${params.TF_VAR_kubernetes_cluster_name}")
+            eplib.loginToTerraform()
+            terraformWorkspaceName = eplib.generateTerraformWorkspaceName("${params.TF_VAR_kubernetes_cluster_name}", "${params.TF_VAR_kubernetes_namespace}", "am-stack")
+            eplib.createTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.TF_VAR_kubernetes_namespace}")
+
+            // set Jenkins build description
+            currentBuild.description = eplib.getJenkinsDescription(params.destroy_mode)
+          }
+        }
+      }
+    }
+    stage('Configure other settings') {
+      steps {
+        container('docker1') {
+          script {
+            publicJwtKey =
+              labelledShell(label: 'Generate public JWT key', returnStdout: true, script: """#!/bin/bash +x
+                echo "${params.TF_VAR_private_jwt_key}" | base64 -d | openssl rsa -pubout -inform DER -outform DER | base64 -w 0
+              """)
+
+            // don't include outputs if running destroy
+            // see https://github.com/hashicorp/terraform/issues/18026
+            if (params.destroy_mode) {
+              pathToAmStackTfConfig = "cloudops-for-kubernetes/terraform/am-stack"
+              labelledShell label: 'Remove Terraform outputs', script: """
+                mv ${pathToAmStackTfConfig}/outputs.tf ${pathToAmStackTfConfig}/outputs.nottf
+              """
+            }
+          }
+        }
+      }
+    }
+    stage('Plan Terraform changes') {
+      when { expression { return params.plan_mode } }
+      steps {
+        container('docker1') {
+          dir("cloudops-for-kubernetes/terraform/am-stack") {
+            script {
+              terraformOperation = eplib.getTerraformCommand(params.destroy_mode, params.plan_mode)
+              tfPlanOutFile = eplib.getTfPlanOutFile()
+
+              labelledShell label: 'Plan Terraform changes', script: """
+                terraform init
+                terraform workspace select ${terraformWorkspaceName}
+
+                set +x
+                export TF_VAR_private_jwt_key="${params.TF_VAR_private_jwt_key}"
+                export TF_VAR_oidc_client_secret="${params.TF_VAR_oidc_client_secret}"
+                export TF_VAR_api_access_token="${params.TF_VAR_api_access_token}"
+                set -x
+                export TF_VAR_public_jwt_key="${publicJwtKey}"
+                export TF_VAR_registry_address="${dockerRegistryAddress}"
+                export TF_VAR_root_domain_name="${rootDomainName}"
+                terraform ${terraformOperation} -var-file=credentials.tfvars \
+                  -parallelism=50 -out=${tfPlanOutFile}
+              """
+            }
+          }
+        }
+      }
+    }
+    stage('Ask confirmation to continue') {
+      when { expression { return params.plan_mode } }
+      steps {
+        timeout(time: 6, unit: "HOURS") {
+          input message: "Should the Terraform changes be applied?", ok: "Yes"
+        }
+      }
+    }
+    stage('Apply Terraform changes') {
+      steps {
+        container('docker1') {
+          dir("cloudops-for-kubernetes/terraform/am-stack") {
+            script {
+              terraformOperation = eplib.getTerraformCommand(params.destroy_mode, false)
+              terraformParams = eplib.getTerraformParams(params.destroy_mode, params.plan_mode)
+
+              // run Terraform for real
+              labelledShell label: 'Apply Terraform changes', script: """
+                terraform init
+                terraform workspace select ${terraformWorkspaceName}
+
+                set +x
+                export TF_VAR_private_jwt_key="${params.TF_VAR_private_jwt_key}"
+                export TF_VAR_oidc_client_secret="${params.TF_VAR_oidc_client_secret}"
+                export TF_VAR_api_access_token="${params.TF_VAR_api_access_token}"
+                set -x
+                export TF_VAR_public_jwt_key="${publicJwtKey}"
+                export TF_VAR_registry_address="${dockerRegistryAddress}"
+                export TF_VAR_root_domain_name="${rootDomainName}"
+                terraform ${terraformOperation} -auto-approve -parallelism=50 ${terraformParams}
+              """
+            }
+          }
+
+          // go back to root dir
+          script {
+            if (params.destroy_mode) {
+              eplib.deleteTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.TF_VAR_kubernetes_namespace}")
+            }
+          }
+        }
+      }
+    }
+    stage('Wait for Keycloak configuration to complete') {
+      when { expression { return (! params.destroy_mode && params.TF_VAR_include_keycloak) } }
+      steps {
+        container('docker1') {
+          script {
+            labelledShell label: 'Wait for Keycloak config', script: """
+              export KUBERNETES_NAMESPACE="${params.TF_VAR_kubernetes_namespace}"
+              export JOB_NAME="am-config-job"
+              export KEEP_JOB="true"
+              ./cloudops-for-kubernetes/lib/wait-for-pod.sh
+            """
+          }
+        }
+      }
+    }
+  }
+}

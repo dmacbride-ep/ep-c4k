@@ -1,0 +1,90 @@
+// this bit is just plain Jenkins Groovy
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+def randomLabel = "jenkins-worker-${UUID.randomUUID().toString()}"
+def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
+def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+
+// this is a workaround until this bug is fixed: https://issues.jenkins-ci.org/browse/JENKINS-56943
+def podYamlFromFile = new File("${env.JENKINS_HOME}/workspace/run-data-pop-tool@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/docker-0.5gb-0.25core-1container.yaml").text.trim();
+String podYaml = podYamlFromFile.replace('${dockerRegistryAddress}', "${dockerRegistryAddress}").replace('${jenkinsAgentImageTag}', "${jenkinsAgentImageTag}")
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent {
+    kubernetes {
+      label "${randomLabel}"
+      defaultContainer "jnlp"
+      yaml "${podYaml}"
+    }
+  }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
+    timeout(time: 120, unit: 'MINUTES')
+      }
+  stages {
+    stage('Validate job parameters') {
+      steps {
+        container('docker1') {
+          script {
+            if ( ! ("${params.dataPopToolCommand}" ==~ "^(reset-db|update-db)\$")) {
+              error "dataPopToolCommand parameter must be either reset-db or update-db"
+            }
+            if ( ! ("${params.epEnvironment}" ==~ "^[a-zA-Z]+[\\w-]+\$")) {
+              error "epEnvironment parameter must start with a letter and must be alphanumeric"
+            }
+            if ( ! ("${params.serverName}" ==~ "^[a-zA-Z]+[\\w-]+\$")) {
+              error "serverName parameter must start with a letter and must be alphanumeric"
+            }
+            if ( ! ("${params.jmsServerName}" ==~ "^[a-zA-Z]+[\\w-]+\$")) {
+              error "jmsServerName parameter must start with a letter and must be alphanumeric"
+            }
+          }
+        }
+      }
+    }
+    stage('Preparation stage') {
+      steps {
+        container('docker1') {
+          script {
+            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+            eplib.loginToCloud()
+            eplib.loginToKubernetesCluster("${params.clusterName}")
+          }
+        }
+      }
+    }
+    stage('Run the data-pop-tool') {
+      steps {
+        container('docker1') {
+          script {
+            String podUuid = "${UUID.randomUUID().toString()}"
+            labelledShell label: 'Run the data-pop-tool', script: """
+              cd cloudops-for-kubernetes
+
+              # env vars for running data-pop-tool:
+              export UUID="${podUuid}"
+              export REGISTRY_ADDRESS="${dockerRegistryAddress}"
+              export DOCKER_IMAGE_TAG="${params.imageTag}"
+              export EP_DATA_POP_TOOL_CMD="${params.dataPopToolCommand}"
+              export EP_COMMERCE_ENVNAME="${params.epEnvironment}"
+              export DATABASE_SECRET=""ep-mysql-${params.serverName}-secret""
+              export JMS_NAME="${params.jmsServerName}"
+
+              mo jenkins/jobs/run-data-pop-tool/data-pop-tool-job.yaml.mo-template \
+                > data-pop-tool-job.yaml
+              kubectl -n ${params.kubernetesNamespace} create -f data-pop-tool-job.yaml
+
+              # wait for data-pod-tool to finish
+              export KUBERNETES_NAMESPACE="${params.kubernetesNamespace}"
+              export JOB_NAME="data-pop-tool-${podUuid}"
+              chmod +x lib/wait-for-pod.sh
+              lib/wait-for-pod.sh
+            """
+          }
+        }
+      }
+    }
+  }
+}

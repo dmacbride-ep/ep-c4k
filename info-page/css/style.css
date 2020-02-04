@@ -1,0 +1,160 @@
+body {
+	font-family: 'Dosis', sans-serif;
+    color: #404142;
+    font-size: 16px;
+	letter-spacing: 0.8px;
+}
+h1, h2, h3, h4, h5, h6 {
+	font-weight: 200;
+}
+ul {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+a {
+	-webkit-transition: all 0.3s;
+  	-moz-transition: all 0.3s;
+  	transition: all 0.3s;
+}
+a:hover, a:focus, a:active, a:visited {
+    text-decoration: none;
+}
+code {
+  background-color: #eee;
+  border: 1px solid #999;
+  display: block;
+  padding: 3px;
+  font-size: 10px;
+}
+
+/* Buttons override */
+.btn {
+	text-transform: uppercase;
+    font-weight: 600;
+}
+.content-ct {
+	text-align: center;
+}
+
+/* ------------------
+	Navigation
+------------------ */
+.side-menu {
+	position: fixed;
+	right: 30px;
+	top: 50%;
+    transform: translateY(-73px);
+    z-index: 99;
+}
+.side-menu ul li {
+    text-align: right;
+    margin: 10px 0;
+}
+.side-menu ul li a span {
+	display: inline-block;
+}
+.side-menu ul li a span.menu-title {
+	color: #fff;
+    position: relative;
+    margin-right: 10px;
+    text-transform: uppercase;
+    font-size: 12px;
+    background-color: #dd5138;
+    padding: 3px 10px;
+    font-weight: 600;
+    border-radius: 3px;
+    -webkit-transition: -webkit-transform 0.2s, opacity 0.2s;
+    -moz-transition: -moz-transform 0.2s, opacity 0.2s;
+    transition: transform 0.2s, opacity 0.2s;
+    -webkit-transform-origin: 100% 50%;
+    -moz-transform-origin: 100% 50%;
+    -ms-transform-origin: 100% 50%;
+    -o-transform-origin: 100% 50%;
+    transform-origin: 100% 50%;
+    opacity: 0;
+}
+.side-menu ul li a:hover span.menu-title {
+    opacity: 1;
+}
+.side-menu ul li a span.dot {
+    position: relative;
+    background-color: #dd5138;
+    border-radius: 2em;
+    height: 10px;
+    width: 10px;
+    -webkit-transition: all 0.3s;
+  	-moz-transition: all 0.3s;
+  	transition: all 0.3s;
+}
+.side-menu ul li a:hover span.dot {
+	transform: scale(1.8);
+}
+
+
+.me-row {
+	padding: 30px 0;
+}
+.row-title {
+	font-weight: 400;
+}
+.config-state {
+	font-weight: bold;
+	color: orange;
+}
+
+.feature {
+	padding: 20px;
+	margin-top: 30px;
+}
+.feature span {
+	font-size: 5em;
+    color: #016cc7;
+}
+
+.speaker .feature {
+	width: 31.333333%;
+	-webkit-transition: all 0.3s;
+  	-moz-transition: all 0.3s;
+  	transition: all 0.3s;
+  	margin-right: 20px;
+  	border: 3px solid #f6f6f6;
+    border-radius: 5px;
+}
+.speaker .feature:hover {
+    box-shadow: 3px 3px 10px #ccc;
+    transform: translateY(-10px);
+}
+
+
+/* ========================================
+    Custom Media Queries
+======================================== */
+
+/* Mobile */
+
+@media (max-width: 767px) {
+    .speaker .feature {
+        width: 100%
+    }
+}
+
+
+/* iPad Portrait */
+
+@media (min-width: 768px) and (max-width: 991px) {
+    .speaker .feature {
+        width: 49%;
+        margin-right: 7px;
+    }
+}
+
+
+/* iPad Landscape */
+
+@media (min-width: 992px) and (max-width: 1199px) {
+    .speaker .feature {
+        width: 49%;
+        margin-right: 9px;
+    }
+}

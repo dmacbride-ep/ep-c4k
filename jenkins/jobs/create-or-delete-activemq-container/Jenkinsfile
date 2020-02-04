@@ -1,0 +1,104 @@
+// this bit is just plain Jenkins Groovy
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+def randomLabel = "jenkins-worker-${UUID.randomUUID().toString()}"
+def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
+def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+
+// this is a workaround until this bug is fixed: https://issues.jenkins-ci.org/browse/JENKINS-56943
+def podYamlFromFile = new File("${env.JENKINS_HOME}/workspace/create-or-delete-activemq-container@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/docker-0.5gb-0.25core-1container.yaml").text.trim();
+String podYaml = podYamlFromFile.replace('${dockerRegistryAddress}', "${dockerRegistryAddress}").replace('${jenkinsAgentImageTag}', "${jenkinsAgentImageTag}")
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent {
+    kubernetes {
+      label "${randomLabel}"
+      defaultContainer "jnlp"
+      yaml "${podYaml}"
+    }
+  }
+  environment {
+    TF_IN_AUTOMATION = "true"
+  }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
+    timeout(time: 30, unit: 'MINUTES')
+      }
+  stages {
+    stage('Validate job parameters') {
+      steps {
+        container('docker1') {
+          script {
+            if ( ! ("${params.serverName}" ==~ "^[a-zA-Z]+[\\w]+\$")) {
+              error "serverName parameter must start with a letter and must be alphanumeric"
+            }
+            if ( ! ("${params.activeMQAllowedCIDR}" ==~ "^\\s*\$|^([0-9]{1,3}.){3}[0-9]{1,3}/32\$")) {
+              error "activeMQAllowedCIDR parameter must be a network CIDR (for example: 5.6.7.8/32)"
+            }
+            if ( ! ("${params.kubernetesNamespace}" ==~ "^[a-zA-Z]+[\\w]+\$")) {
+              error "namespace parameter must start with a letter and must be alphanumeric"
+            }
+          }
+        }
+      }
+    }
+    stage('Preparation Stage') {
+      steps {
+        container('docker1') {
+          script {
+            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+            eplib.loginToCloud()
+            eplib.loginToKubernetesCluster("${params.clusterName}")
+            eplib.loginToTerraform()
+
+            terraformWorkspaceName = eplib.generateTerraformWorkspaceName("${params.clusterName}", "${params.kubernetesNamespace}", "activemq", "${params.serverName}")
+            eplib.createTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.kubernetesNamespace}")
+
+          }
+        }
+      }
+    }
+    stage('Create/Delete ActiveMQ') {
+      steps {
+        container('docker1') {
+          script {
+            def domainName = new File(secretsDirectory, "domainName").text.trim()
+            String terraformOperation = null
+            if(params.deleteContainer) {
+              terraformOperation = "destroy"
+            } else {
+              terraformOperation = "apply"
+            }
+            labelledShell label: 'Run Terraform', script: """#!/bin/bash
+              cd "${WORKSPACE}/cloudops-for-kubernetes/terraform/activemq"
+              terraform init -get-plugins=false
+              terraform workspace select ${terraformWorkspaceName}
+              export TF_VAR_domain="${params.dnsZoneName}"
+              export TF_VAR_kubernetes_cluster_name="${params.clusterName}"
+              export TF_VAR_kubernetes_namespace="${params.kubernetesNamespace}"
+              export TF_VAR_activemq_service_name="${params.serverName}"
+              export TF_VAR_jms_name="${params.serverName}"
+              export TF_VAR_activemq_allowed_cidr="${params.activeMQAllowedCIDR}"
+              export TF_VAR_registry_secret="ep-registry-creds-secret"
+              export TF_VAR_registry_address="${dockerRegistryAddress}"
+              export TF_VAR_docker_image_namespace="/ep"
+              export TF_VAR_docker_image_tag="${params.imageTag}"
+              terraform ${terraformOperation} -var-file=credentials.tfvars -parallelism=50 -auto-approve -no-color -input=false
+            """
+          }
+        }
+      }
+    }
+    stage('Clean-up Stage') {
+      steps {
+        container('docker1') {
+          script {
+            eplib.deleteTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.kubernetesNamespace}")
+          }
+        }
+      }
+    }
+  }
+}

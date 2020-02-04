@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kubernetes-bootstrap-{{UUID}}
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      containers:
+      - name: kubernetes-bootstrap-{{UUID}}
+        image: "{{REGISTRY_ADDRESS}}/bootstrap/kubernetes-bootstrap:{{DOCKER_IMAGE_TAG}}"
+        imagePullPolicy: Always
+        env:
+        - name: bootstrapMode
+          value: "{{BOOTSTRAP_MODE}}"
+        - name: baseName
+          value: "{{BASE_NAME}}"
+        - name: clusterName
+          value: "{{CLUSTER_NAME}}"
+        - name: domainName
+          value: "{{DOMAIN_NAME}}"
+        - name: location
+          value: "{{LOCATION}}"
+        - name: aksNodeVMSize
+          value: "{{AKSNODEVMSIZE}}"
+        - name: aksNodeCount
+          value: "{{AKSNODECOUNT}}"
+        - name: sshPubKey
+          value: "{{AKS_PUBLIC_SSH_KEY}}"
+        - name: azureSubscriptionId
+          value: "{{AZ_SUBSCRIPTION_ID}}"
+        - name: azureServicePrincipalTenantId
+          value: "{{AZ_TENANT_ID}}"
+        - name: azureServicePrincipalAppId
+          value: "{{AZ_SP_APP_ID}}"
+        - name: azureServicePrincipalPassword
+          valueFrom:
+            secretKeyRef:
+              name: {{K8S_SECRET}}
+              key: {{AZ_SP_PASSWORD_ID_KEY}}
+      dnsConfig:
+        options:
+          - name: single-request-reopen
+          - name: timeout
+            value: "3"
+          - name: attempts
+            value: "3"
+      restartPolicy: Never

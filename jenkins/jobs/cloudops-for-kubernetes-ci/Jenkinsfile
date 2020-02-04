@@ -1,0 +1,893 @@
+// this bit is just plain Jenkins Groovy
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+def randomLabel = "jenkins-worker-${UUID.randomUUID().toString()}"
+def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
+def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+
+def cloud = new File(secretsDirectory, "cloud").text.trim();
+def defaultAmReleasePackageUrl = new File(secretsDirectory, "defaultAmReleasePackageUrl").text.trim();
+
+// this is a workaround until this bug is fixed: https://issues.jenkins-ci.org/browse/JENKINS-56943
+def podYamlFromFile = new File("${env.JENKINS_HOME}/workspace/${env.JOB_NAME}@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/docker-1gb-1core-1container.yaml").text.trim();
+String podYaml = podYamlFromFile.replace('${dockerRegistryAddress}', "${dockerRegistryAddress}").replace('${jenkinsAgentImageTag}', "${jenkinsAgentImageTag}")
+
+def runRemoteJob(String jobName, String parameters) {
+  triggerRemoteJob(
+    job: "https://jenkins.${params.kubernetesClusterName}.${params.domainName}/job/${jobName}",
+    parameters: "${parameters}",
+    auth: TokenAuth(
+       apiToken: "${jenkinsAPItoken}",
+       userName: "${jenkinsAdminUser}"
+    ),
+    enhancedLogging: true,
+    trustAllCertificates: jenkinsTrustAllCerts,
+    overrideTrustAllCertificates: jenkinsTrustAllCerts
+  )
+}
+
+def addToList(String entry, List list) {
+  if ( !entry.equals("")) {
+    list << entry
+  }
+}
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent {
+    kubernetes {
+      label "${randomLabel}"
+      defaultContainer "jnlp"
+      yaml "${podYaml}"
+    }
+  }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '90', artifactNumToKeepStr: '100'))
+      }
+  environment {
+    dockerImageTag = "${params.dockerBranch}".replace('/','-');
+    cloudopsImageTag = "${params.cloudOpsForKubernetesBranch}".replace('/','-');
+  }
+  stages {
+    // we need to validate any job parameters that aren't validated inside the bootstrap container
+    stage('Validate job parameters') {
+      steps {
+        container('docker1') {
+          script {
+            def zoneName = "${params.domainName}".trim()
+            def parentZoneName = "${params.zoneForNSRecord}".trim()
+
+            if(zoneName.equals("")) throw new Exception("domainName parameter must be non-empty")
+            if(parentZoneName.equals("")) throw new Exception("zoneForNSRecord parameter must be non-empty")
+            if(zoneName.indexOf(parentZoneName) == -1) throw new Exception("domainName must be a subdomain of resourceGroupForParentZone")
+            if (cloud.equals("azure")) {
+              def resourceGroupForZone = "${params.resourceGroup}".trim()
+              def resourceGroupForParentZone = "${params.resourceGroupForParentZone}".trim()
+
+              if(resourceGroupForZone.equals("")) throw new Exception("resourceGroup parameter must be non-empty")
+              if(resourceGroupForParentZone.equals("")) throw new Exception("resourceGroupForParentZone parameter must be non-empty")
+
+              if("${params.azureServicePrincipalAppId}".trim().equals("")) throw new Exception("azureServicePrincipalAppId must be non-empty")
+              if("${params.azureServicePrincipalPassword}".trim().equals("")) throw new Exception("azureServicePrincipalPassword must be non-empty")
+
+            } else if (cloud.equals("aws")) {
+              if("${params.awsAccessKeyId}".trim().equals("")) throw new Exception("awsAccessKeyId must be non-empty")
+              if("${params.awsSecretAccessKey}".trim().equals("")) throw new Exception("awsSecretAccessKey must be non-empty")
+            }
+          }
+        }
+      }
+    }
+    stage('Check no EKS cluster exists in the AWS test account') {
+      environment {
+        AWS_ACCESS_KEY_ID="${params.awsAccessKeyId}"
+        AWS_SECRET_ACCESS_KEY="${params.awsSecretAccessKey}"
+      }
+      steps {
+        container('docker1') {
+          script {
+            if (cloud.equals("aws")) {
+              def eksClustersJSONText = labelledShell(
+                label: 'Get the EKS clusters', returnStdout: true, script: """
+                  eksctl get clusters --output json
+                """).trim();
+              def eksClustersList = readJSON(text: eksClustersJSONText)
+              if(!(eksClustersList.size() == 0)) throw new Exception("EKS cluster already exists in the AWS account")
+            }
+          }
+        }
+      }
+    }
+    stage('Load EP Groovy Library') {
+      steps {
+        container('docker1') {
+          script {
+            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+          }
+        }
+      }
+    }
+    stage('Login to cloud, the Kubernetes cluster, and the Docker Registry') {
+      steps {
+        container('docker1') {
+          script {
+            eplib.loginToCloud()
+            eplib.loginToKubernetesCluster("${kubernetesClusterName}")
+            eplib.loginToDockerRegistry()
+          }
+        }
+      }
+    }
+    stage('Check Resource Group for bootstrapped AKS cluster') {
+      steps {
+        container('docker1') {
+          script {
+            if (cloud.equals("azure")) {
+              labelledShell label: 'Validate that the Resource Group exists', script: """
+                az group exists --name "${params.resourceGroup}"
+              """
+            }
+          }
+        }
+      }
+    }
+    stage('Build the bootstrap image') {
+      steps {
+        container('docker1') {
+          script {
+            labelledShell label: 'Build the bootstrap image', script: """
+              cd cloudops-for-kubernetes
+              img build -t ${dockerRegistryAddress}/bootstrap/kubernetes-bootstrap:${cloudopsImageTag} .
+              img push ${dockerRegistryAddress}/bootstrap/kubernetes-bootstrap:${cloudopsImageTag}
+            """
+          }
+        }
+      }
+    }
+    stage('Generate a new SSH key-pair for the Kubernetes cluster nodes') {
+      steps {
+        container('docker1') {
+          labelledShell label: 'Generate a new SSH key-pair for the Kubernetes cluster nodes', script: """
+            cd cloudops-for-kubernetes
+            rm id_rsa_kubernetes_cluster id_rsa_kubernetes_cluster.pub || true
+            ssh-keygen -f id_rsa_kubernetes_cluster -t rsa -N ''
+          """
+        }
+      }
+    }
+    stage('Create Namespace if it does not exist') {
+      steps {
+        container('docker1') {
+          script {
+            labelledShell label: 'Check Kubectl namespace', script: """
+              (kubectl get namespace "${params.kubernetesNamespace}") || kubectl create namespace "${params.kubernetesNamespace}"
+            """
+          }
+        }
+      }
+    }
+    stage('Upload Jenkins password parameters to a Kubernetes secret') {
+      steps {
+        container('docker1') {
+          script {
+            sharedUuid = "${UUID.randomUUID().toString()}"
+
+            // one of service-principal-password and aws-secret-access-key will be empty depending on which cloud
+            withCredentials(bindings: [sshUserPrivateKey(credentialsId: "${params.gitReposPrivateKey}", \
+                                                         keyFileVariable: 'GIT_PRIVATE_SSH_KEY')]) {
+              labelledShell label: 'Upload Jenkins password parameters to a Kubernetes secret', script: """
+                set +x
+                kubectl create secret -n ${params.kubernetesNamespace} generic "bootstrap-secret-${sharedUuid}" \
+                    --from-literal=service-principal-password=${params.azureServicePrincipalPassword} \
+                    --from-literal=aws-secret-access-key=${params.awsSecretAccessKey} \
+                    --from-literal=ep-nexus-password=${params.epRepositoryPassword} \
+                    --from-literal=git-repo-private-ssh-key="\$(cat ${env.GIT_PRIVATE_SSH_KEY})"
+                set -x
+              """
+            }
+          }
+        }
+      }
+    }
+    stage('Run the bootstrap container in setup mode') {
+      steps {
+        container('docker1') {
+          script {
+            String setupUuid = "${UUID.randomUUID().toString()}"
+            resourceUuid = "${UUID.randomUUID().toString()}"
+
+            jenkinsServerPublicIP = labelledShell(
+              label: 'Get the public IP of this Jenkins server', returnStdout: true, script: """
+                echo "\$(dig TXT +short o-o.myaddr.l.google.com @ns1.google.com | tr -d '"')/32"
+              """).trim();
+
+            def kubernetesClusterAllowedIPs = labelledShell(
+              label: 'Get the IPs that were allowed to access the Kubernetes API for this Kubernetes cluster', returnStdout: true, script: """
+                if [ "${cloud}" = "azure" ]; then
+                  az aks show --resource-group "\$(cat /jenkins-secrets/resourceGroupName)" --name "${kubernetesClusterName}" --query apiServerAccessProfile.authorizedIpRanges | jq -r 'join(",")'
+                else
+                  echo ""
+                fi
+              """).trim();
+
+            def jenkinsIPList = []
+            addToList(jenkinsServerPublicIP, jenkinsIPList)
+            addToList(kubernetesClusterAllowedIPs, jenkinsIPList)
+            addToList(jenkinsIngressCIDR, jenkinsIPList)
+
+            def nexusIPList = []
+            addToList(jenkinsServerPublicIP, nexusIPList)
+            addToList(kubernetesClusterAllowedIPs, nexusIPList)
+            addToList(nexusIngressCIDR, nexusIPList)
+
+            formattedJenkinsList = jenkinsIPList.toString().replace("[", "").replace("]", "").replaceAll("\\s+", "").trim();
+            formattedNexusList = nexusIPList.toString().replace("[", "").replace("]", "").replaceAll("\\s+", "").trim();
+
+            labelledShell label: 'Run the bootstrap container', script: """
+              # env vars for running the bootstrap container:
+              export UUID="${setupUuid}"
+              export RESOURCE_UUID="${resourceUuid}"
+
+              export REGISTRY_ADDRESS="${dockerRegistryAddress}"
+              export DOCKER_IMAGE_TAG="${cloudopsImageTag}"
+              export CLOUD="${cloud}"
+
+              if [ "${cloud}" = "azure" ]; then
+                export AZ_SUBSCRIPTION_ID="${params.azureSubscriptionId}"
+                export AZ_TENANT_ID="${params.azureServicePrincipalTenantId}"
+                export AZ_SP_APP_ID="${params.azureServicePrincipalAppId}"
+                export AZURE_RESOURCE_GROUP_NAME="${params.resourceGroup}"
+                export LOCATION="${params.location}"
+                export AKSNODEVMSIZE="${params.aksNodeVMSize}"
+                export AKSNODECOUNT="${params.aksNodeCount}"
+                export AKS_PUBLIC_SSH_KEY="\$(cat cloudops-for-kubernetes/id_rsa_kubernetes_cluster.pub)"
+                export AZ_SP_PASSWORD_ID_KEY="service-principal-password"
+
+                export AWS_ACCESS_KEY_ID_CI=""
+                export REGION=""
+                export AWS_EKS_INSTANCE_TYPE=""
+                export AWS_EKS_NODE_COUNT=""
+                export EKS_PUBLIC_SSH_KEY=""
+                export AWS_SECRET_ACCESS_KEY_CI="aws-secret-access-key"
+
+              elif [ "${cloud}" = "aws" ]; then
+                export AZ_SUBSCRIPTION_ID=""
+                export AZ_TENANT_ID=""
+                export AZ_SP_APP_ID=""
+                export AZURE_RESOURCE_GROUP_NAME=""
+                export LOCATION=""
+                export AKSNODEVMSIZE=""
+                export AKSNODECOUNT=""
+                export AKS_PUBLIC_SSH_KEY=""
+                export AZ_SP_PASSWORD_ID_KEY="service-principal-password"
+
+                export AWS_ACCESS_KEY_ID_CI="${params.awsAccessKeyId}"
+                export REGION="${params.region}"
+                export AWS_EKS_INSTANCE_TYPE="${params.eksInstanceType}"
+                export AWS_EKS_NODE_COUNT="${params.eksNodeCount}"
+                export EKS_PUBLIC_SSH_KEY="\$(cat cloudops-for-kubernetes/id_rsa_kubernetes_cluster.pub)"
+                export AWS_SECRET_ACCESS_KEY_CI="aws-secret-access-key"
+              fi
+
+              export BOOTSTRAP_MODE="setup"
+              export DOMAIN_NAME="${params.domainName}"
+              export KUBERNETES_CLUSTER_NAME="${params.kubernetesClusterName}"
+              export K8S_API_SERVER_AUTHORIZED_IP_RANGES='[ "${jenkinsServerPublicIP}" ]'
+              export EP_NEXUS_USER="${params.epRepositoryUser}"
+              export EP_CORTEX_MAVEN_REPO_URL="${params.epCortexMavenRepoUrl}"
+              export EP_COMMERCE_ENGINE_MAVEN_REPO_URL="${params.epCommerceEngineMavenRepoUrl}"
+              export EP_ACCELERATORS_MAVEN_REPO_URL="${params.epAcceleratorsMavenRepoUrl}"
+              export JENKINS_ALLOWED_CIDR="${formattedJenkinsList}"
+              export NEXUS_ALLOWED_CIDR="${formattedNexusList}"
+              export JDK_DOWNLOAD_URI="${params.oracleJdkDownloadUrl}"
+              export JDK_FOLDER_NAME="${params.jdkFolderName}"
+              export TOMCAT_VERSION="${params.tomcatVersion}"
+              export DEFAULT_AM_RELEASE_PACKAGE_URL="${defaultAmReleasePackageUrl}"
+              export SSH_HOST_KEY="${params.gitSSHHostKey}"
+              export EP_KUBERNETES_REPO_URL="${params.cloudOpsForKubernetesRepoURL}"
+              export EP_KUBERNETES_BRANCH="${params.cloudOpsForKubernetesBranch}"
+              export EP_COMMERCE_REPO_URL="${params.epCommerceRepoURL}"
+              export EP_COMMERCE_BRANCH="${params.epCommerceBranch}"
+              export EP_DOCKER_REPO_URL="${params.dockerRepoURL}"
+              export EP_DOCKER_BRANCH="${params.dockerBranch}"
+
+              export K8S_SECRET="bootstrap-secret-${sharedUuid}"
+
+              export EP_NEXUS_PASSWORD_KEY="ep-nexus-password"
+              export PRIVATE_SSH_KEY_KEY="git-repo-private-ssh-key"
+
+              mo --fail-not-set cloudops-for-kubernetes/jenkins/jobs/cloudops-for-kubernetes-ci/bootstrap-kubernetes.yaml.mo-template \
+                > cloudops-for-kubernetes/bootstrap.yaml
+              kubectl -n ${params.kubernetesNamespace} create -f cloudops-for-kubernetes/bootstrap.yaml
+
+              export KUBERNETES_NAMESPACE="${params.kubernetesNamespace}"
+              export JOB_NAME="kubernetes-bootstrap-${setupUuid}"
+              chmod +x cloudops-for-kubernetes/lib/wait-for-pod.sh
+              cloudops-for-kubernetes/lib/wait-for-pod.sh
+            """
+          }
+        }
+      }
+    }
+    stage('Create NS record for bootstrapped Kubernetes cluster') {
+      steps {
+        container('docker1') {
+          script {
+            def zoneName = "${params.domainName}".trim()
+            def parentZoneName = "${params.zoneForNSRecord}".trim()
+
+            if (cloud.equals("azure")) {
+              def resourceGroupForZone = "${params.resourceGroup}".trim()
+              def resourceGroupForParentZone = "${params.resourceGroupForParentZone}".trim()
+
+              // find the nameservers for the zone that was created by the bootstrap container
+              eplib.loginToBootstrappedCloud()
+              def nameServerJSONText = labelledShell( label: 'Get nameservers for bootstrapped cluster', returnStdout: true, script: """
+                az network dns zone show --resource-group "${resourceGroupForZone}" --name "${zoneName}" --output json
+              """).trim()
+              def nameServerJSON =  readJSON(text: nameServerJSONText)
+              def nameServersList = nameServerJSON.get("nameServers")
+              eplib.loginToCloud()
+
+              // generate the name of the record
+              // e.g. if the parent zone is cloud.example.com and the zone created by the bootstrap container
+              // is alice.dev.cloud.example.com, the record name would be alice.dev
+              def nsRecordName = zoneName.substring(0, zoneName.lastIndexOf(zoneForNSRecord) - 1)
+
+              // create the NS record
+              // we use a 60 second TTL to ensure that if we reuse names that it's cleared out of DNS caches quickly
+              labelledShell label: 'Create the NS record', script: """
+                az network dns record-set ns create --resource-group "${resourceGroupForParentZone}" --zone-name "${parentZoneName}" --name "${nsRecordName}" --ttl 60
+              """
+              for( nsAddress in nameServersList) {
+                labelledShell label: 'Add nameserver to the NS record', script: """
+                  az network dns record-set ns add-record --resource-group "${resourceGroupForParentZone}" --zone-name "${parentZoneName}" --record-set-name "${nsRecordName}" --nsdname ${nsAddress}
+                """
+              }
+
+            } else if (cloud.equals("aws")) {
+              eksHostZoneId = labelledShell( label: 'Get EKS host zone id', returnStdout: true, script: """
+                set +x
+                export AWS_ACCESS_KEY_ID="${params.awsAccessKeyId}"
+                export AWS_SECRET_ACCESS_KEY="${params.awsSecretAccessKey}"
+                set -x
+                aws route53 list-hosted-zones-by-name --dns-name "${zoneName}" --query "HostedZones[?Name == '${zoneName}.']" | jq '.[0].Id'
+              """).trim()
+
+              labelledShell label: 'Create NS record change batch', script: """
+                set +x
+                export AWS_ACCESS_KEY_ID="${params.awsAccessKeyId}"
+                export AWS_SECRET_ACCESS_KEY="${params.awsSecretAccessKey}"
+                set -x
+                echo `aws route53 list-resource-record-sets --hosted-zone-id "${eksHostZoneId}" --query "ResourceRecordSets[?Type == 'NS']" | jq '.| {Changes: [{Action: "UPSERT", ResourceRecordSet: .[0]}]}' | jq '.Changes[].ResourceRecordSet.TTL=60'` > change_batch.json
+                cat change_batch.json
+              """
+
+              eksParentHostZoneId = labelledShell( label: 'Get parent host zone id', returnStdout: true, script: """
+                aws route53 list-hosted-zones-by-name --dns-name "${parentZoneName}" --query "HostedZones[?Name == '${parentZoneName}.']" | jq '.[0].Id'
+              """).trim()
+
+              labelledShell label: 'Create NS record in parent zone', script: """
+                aws route53 change-resource-record-sets --hosted-zone-id "${eksParentHostZoneId}" --change-batch file://change_batch.json
+              """
+
+            } else {
+              error "NS record unimplemented for cloud ${cloud}"
+            }
+          }
+        }
+      }
+    }
+    stage('Wait for bootstrap and build agent Jenkins jobs to finish') {
+      environment {
+        AWS_ACCESS_KEY_ID="${params.awsAccessKeyId}"
+        AWS_SECRET_ACCESS_KEY="${params.awsSecretAccessKey}"
+      }
+      steps {
+        container('docker1') {
+          script {
+            if (cloud.equals("azure")) {
+              eplib.loginToBootstrappedCloud()
+              labelledShell label: 'Login to the new Kubernetes cluster', script: """
+                az aks get-credentials --overwrite-existing --resource-group "${params.resourceGroup}" --name "${params.kubernetesClusterName}"
+              """
+
+            } else if (cloud.equals("aws")) {
+              labelledShell label: 'Login to the new Kubernetes cluster', script: """
+                aws eks update-kubeconfig --name "${params.kubernetesClusterName}" --verbose
+              """
+            }
+
+            labelledShell label: 'Create a Kubernetes secret for Jenkins API key', script: """
+              # get the token from the Jenkins pod
+              kubectl cp default/\$(kubectl get pods -l 'app.kubernetes.io/name=jenkins' -o jsonpath='{.items[*].metadata.name}'):/secret/APItoken.txt ./APItoken.txt
+              kubectl get secret jenkins -o json | jq --arg APItoken "\$(cat APItoken.txt | base64)" '.data["APItoken"]=\$APItoken' | kubectl apply -f -
+            """
+
+            // get Jenkins master pod name and admin creds
+            def jenkinsSecretsJsonText = labelledShell(
+              label: 'Get key names of the jenkins Kubernetes secret', returnStdout: true, script: """
+              kubectl -n default get secret jenkins -o json
+              """).trim();
+            def jenkinsSecretsJson = readJSON(text: jenkinsSecretsJsonText)
+            def jenkinsSecretsMap = jenkinsSecretsJson.get("data")
+            def jenkinsAdminUserKey = "jenkins-admin-user".toString()
+            def jenkinsAdminPwdKey = "jenkins-admin-password".toString()
+            def jenkinsAPItokenKey = "APItoken".toString()
+
+            jenkinsAdminUser = new String(jenkinsSecretsMap[jenkinsAdminUserKey].decodeBase64())
+            jenkinsAdminPassword = new String(jenkinsSecretsMap[jenkinsAdminPwdKey].decodeBase64())
+            jenkinsAPItoken = new String(jenkinsSecretsMap[jenkinsAPItokenKey].decodeBase64())
+
+            def jenkinsTrustAllCertsKey = "jenkinsTrustAllCertificates".toString()
+            jenkinsTrustAllCerts = new String(readJSON(text: labelledShell(
+              label: 'Get key names of the jenkins Kubernetes secret', returnStdout: true, script: """
+              kubectl -n default get secret jenkins-secrets -o json
+              """).trim()).get("data")[jenkinsTrustAllCertsKey].decodeBase64()).toBoolean()
+          }
+
+          labelledShell label: 'Wait for Jenkins to be ready', script: """
+            # make scripts executable
+            chmod +x cloudops-for-kubernetes/jenkins/jobs/cloudops-for-kubernetes-ci/wait-for-job.sh
+
+            # wait for the Jenkins Deployment to be ready
+            kubectl -n default wait --timeout 1200s --for=condition=Available deployment jenkins
+
+            # show logs for deployed Jenkins server
+            kubectl logs pod/\$(kubectl get pods -l 'app.kubernetes.io/name=jenkins' -o jsonpath='{.items[*].metadata.name}') -c copy-default-config
+            kubectl logs pod/\$(kubectl get pods -l 'app.kubernetes.io/name=jenkins' -o jsonpath='{.items[*].metadata.name}')
+
+            # set jenkins credentials
+            export JENKINS_URL="http://jenkins.${params.kubernetesClusterName}.${params.domainName}"
+            set +x
+            export JENKINS_ADMIN_USERNAME="${jenkinsAdminUser}"
+            export JENKINS_ADMIN_PASSWORD="${jenkinsAdminPassword}"
+            set -x
+
+            export JENKINS_JOB="bootstrap"
+            export JENKINS_JOB_TIMEOUT="2400" # (40 mins)
+            export JENKINS_BUILD_NUMBER="lastBuild"
+            cloudops-for-kubernetes/jenkins/jobs/cloudops-for-kubernetes-ci/wait-for-job.sh
+
+            export JENKINS_JOB="build-jenkins-agents"
+            export JENKINS_JOB_TIMEOUT="1800" # (30 mins)
+            export JENKINS_BUILD_NUMBER="lastBuild"
+            cloudops-for-kubernetes/jenkins/jobs/cloudops-for-kubernetes-ci/wait-for-job.sh
+          """
+        }
+      }
+    }
+    stage('Parallel Stage: Build deployment package and deploy Azure MySQL server') {
+      parallel {
+        stage('Deploy Azure MySQL server') {
+          agent { kubernetes { label "${randomLabel}-1"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                if (cloud.equals("azure")) {
+                  azureMysqlServerName = labelledShell( label: 'Generate server name', returnStdout: true, script: """
+                    echo "epazuremysql\$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 5 | head -n 1)"
+                    """).trim()
+
+                  runRemoteJob("create-or-delete-mysql-server", "serverName=${azureMysqlServerName}\nkubernetesNamespace=azuremysql")
+                }
+              }
+            }
+          }
+        }
+        stage('Build deployment package') {
+          agent { kubernetes { label "${randomLabel}-2"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                runRemoteJob("build-deployment-package", "")
+              }
+            }
+          }
+        }
+      }
+    }
+    stage('Build Docker images') {
+      steps {
+        container('docker1') {
+          script {
+            runRemoteJob("build-core-images", "")
+            runRemoteJob("build-app-images", "")
+          }
+        }
+      }
+    }
+    stage('Parallel Stage: Create ActiveMQ pods') {
+      parallel {
+        stage('Create ActiveMQ pods for the MySQL server') {
+          agent { kubernetes { label "${randomLabel}-1"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                if (cloud.equals("azure")) {
+                  activeMQContainerServerName1 = labelledShell( label: 'Generate server name for ActiveMQ pod 1', returnStdout: true, script: """
+                    echo "activemqcontainer\$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 5 | head -n 1)"
+                    """).trim()
+
+                  runRemoteJob("create-or-delete-activemq-container", "serverName=${activeMQContainerServerName1}\nkubernetesNamespace=azuremysql\nimageTag=${dockerImageTag}\ndnsSubDomain=azureciserver")
+                }
+              }
+            }
+          }
+        }
+        stage('Create ActiveMQ pods for the MySQL container') {
+          agent { kubernetes { label "${randomLabel}-2"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                activeMQContainerServerName2 = labelledShell( label: 'Generate server name for ActiveMQ pod 2', returnStdout: true, script: """
+                  echo "activemqcontainer\$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 5 | head -n 1)"
+                  """).trim()
+
+                runRemoteJob("create-or-delete-activemq-container", "serverName=${activeMQContainerServerName2}\nkubernetesNamespace=default\nimageTag=${dockerImageTag}\ndnsSubDomain=cicontainer")
+              }
+            }
+          }
+        }
+      }
+    }
+    stage('Parallel Stage: Create MySQL pod and data-populate Azure MySQL server') {
+      parallel {
+        stage('Data-populate Azure MySQL server') {
+          agent { kubernetes { label "${randomLabel}-1"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                if (cloud.equals("azure")) {
+                  runRemoteJob("run-data-pop-tool", "serverName=${azureMysqlServerName}\njmsServerName=${activeMQContainerServerName1}\nkubernetesNamespace=azuremysql\ndataPopToolCommand=reset-db")
+                }
+              }
+            }
+          }
+        }
+        stage('Create MySQL pod') {
+          agent { kubernetes { label "${randomLabel}-2"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                mysqlContainerServerName = labelledShell( label: 'Generate server name', returnStdout: true, script: """
+                  echo "mysqlcontainer\$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 5 | head -n 1)"
+                  """).trim()
+
+                runRemoteJob("create-or-delete-mysql-container", "serverName=${mysqlContainerServerName}\nkubernetesNamespace=default\nimageTag=${dockerImageTag}")
+              }
+            }
+          }
+        }
+      }
+    }
+    stage('Parallel Stage: Data-populate MySQL pod and deploy EP stack against Azure MySQL') {
+      parallel {
+        stage('Deploy EP stack against Azure MySQL') {
+          agent { kubernetes { label "${randomLabel}-1"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                if (cloud.equals("azure")) {
+                  runRemoteJob("deploy-or-delete-ep-stack", "dbServerName=${azureMysqlServerName}\njmsServerName=${activeMQContainerServerName1}\nkubernetesNamespace=azuremysql\ndnsSubDomain=azureciserver")
+                }
+              }
+            }
+          }
+        }
+        stage('Data-populate MySQL pod') {
+          agent { kubernetes { label "${randomLabel}-2"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                runRemoteJob("run-data-pop-tool", "serverName=${mysqlContainerServerName}\njmsServerName=${activeMQContainerServerName2}\nkubernetesNamespace=default\ndataPopToolCommand=reset-db")
+              }
+            }
+          }
+        }
+      }
+    }
+    stage('Deploy EP stack against MySQL pod') {
+      steps {
+        container('docker1') {
+          script {
+            runRemoteJob("deploy-or-delete-ep-stack", "dbServerName=${mysqlContainerServerName}\njmsServerName=${activeMQContainerServerName2}\ndnsSubDomain=cicontainer")
+          }
+        }
+      }
+    }
+    stage('Parallel Stage: Run Cortex system tests') {
+      when {
+        expression { params.runCortexSystemTests == true }
+      }
+      parallel {
+        stage('Run Cortex system tests on EP stack against Azure MySQL') {
+          agent { kubernetes { label "${randomLabel}-1"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                if (cloud.equals("azure")) {
+                  def serverHandle = runRemoteJob("run-cortex-system-tests", "kubernetesNamespace=azuremysql\njmsServerName=${activeMQContainerServerName1}")
+                  serverTestResult = serverHandle.getBuildResult()
+                  if (serverTestResult == "UNSTABLE") {
+                    unstable('There are failures in the Cortex system tests against the Azure MySQL EP stack')
+                  }
+                }
+              }
+            }
+          }
+        }
+        stage('Run Cortex system tests on EP stack against MySQL pod') {
+          agent { kubernetes { label "${randomLabel}-2"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                def containerHandle = runRemoteJob("run-cortex-system-tests", "jmsServerName=${activeMQContainerServerName2}")
+                containerTestResult = containerHandle.getBuildResult()
+                if (containerTestResult == "UNSTABLE") {
+                  unstable('There are failures in the Cortex system tests against the MySQL pod EP stack')
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    stage('Parallel Stage: Delete EP stacks') {
+      when {
+        expression { params.cleanupResourceGroup == true }
+      }
+      parallel {
+        stage('Delete EP stack for MySQL server') {
+          agent { kubernetes { label "${randomLabel}-1"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                if (cloud.equals("azure")) {
+                  runRemoteJob("deploy-or-delete-ep-stack", "dbServerName=${azureMysqlServerName}\njmsServerName=${activeMQContainerServerName1}\nkubernetesNamespace=azuremysql\ndnsSubDomain=azureciserver\ndeleteStack=true")
+                }
+              }
+            }
+          }
+        }
+        stage('Delete EP stack for MySQL container') {
+          agent { kubernetes { label "${randomLabel}-2"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                runRemoteJob("deploy-or-delete-ep-stack", "dbServerName=${mysqlContainerServerName}\njmsServerName=${activeMQContainerServerName2}\ndnsSubDomain=cicontainer\ndeleteStack=true")
+              }
+            }
+          }
+        }
+      }
+    }
+    stage('Parallel Stage: Delete ActiveMQ pods and MySQL instances') {
+      when {
+        expression { params.cleanupResourceGroup == true }
+      }
+      parallel {
+        stage('Delete ActiveMQ for MySQL server') {
+          agent { kubernetes { label "${randomLabel}-1"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                if (cloud.equals("azure")) {
+                  runRemoteJob("create-or-delete-activemq-container", "serverName=${activeMQContainerServerName1}\nkubernetesNamespace=azuremysql\nimageTag=${dockerImageTag}\ndnsSubDomain=azureciserver\ndeleteContainer=true")
+                }
+              }
+            }
+          }
+        }
+        stage('Delete ActiveMQ for MySQL container') {
+          agent { kubernetes { label "${randomLabel}-2"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                runRemoteJob("create-or-delete-activemq-container", "serverName=${activeMQContainerServerName2}\nkubernetesNamespace=default\nimageTag=${dockerImageTag}\ndnsSubDomain=cicontainer\ndeleteContainer=true")
+              }
+            }
+          }
+        }
+        stage('Delete MySQL container') {
+          agent { kubernetes { label "${randomLabel}-3"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                runRemoteJob("create-or-delete-mysql-container", "serverName=${mysqlContainerServerName}\nkubernetesNamespace=default\nimageTag=${dockerImageTag}\ndeleteContainer=true")
+              }
+            }
+          }
+        }
+        stage('Delete MySQL server') {
+          agent { kubernetes { label "${randomLabel}-4"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                if (cloud.equals("azure")) {
+                  runRemoteJob("create-or-delete-mysql-server", "serverName=${azureMysqlServerName}\nkubernetesNamespace=azuremysql\ndeleteServer=true")
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  post {
+    always {
+      container('docker1') {
+        script {
+          try {
+            // login to the CI server cluster
+            eplib.loginToCloud()
+            eplib.loginToKubernetesCluster("${kubernetesClusterName}")
+            labelledShell label: 'Get and describe all Kubernetes resources for CI Kubernetes cluster', script: """
+              cd cloudops-for-kubernetes
+              lib/get-and-describe-all-resources.sh "ci-cluster"
+            """
+            archiveArtifacts artifacts: 'cloudops-for-kubernetes/ci-cluster-all-resources.yaml'
+            archiveArtifacts artifacts: 'cloudops-for-kubernetes/ci-cluster-all-resource-descriptions.txt'
+          } catch(Exception e) {
+            print "failed to get and describe all Kubernetes resources for CI Kubernetes cluster due to:\n" + e.getMessage()
+          }
+          try {
+            cleanupUuid = "${UUID.randomUUID().toString()}"
+            // switch to the deployed cluster
+            eplib.loginToBootstrappedCloud()
+            if (cloud.equals("azure")) {
+              eplib.loginToKubernetesCluster("${params.resourceGroup}", "${params.kubernetesClusterName}")
+              labelledShell label: 'Get and describe all Kubernetes resources for test Kubernetes cluster', script: """
+                cd cloudops-for-kubernetes
+                lib/get-and-describe-all-resources.sh "test-cluster"
+              """
+
+            } else if (cloud.equals("aws")) {
+              labelledShell label: 'Get and describe all Kubernetes resources for test Kubernetes cluster', script: """
+                set +x
+                export AWS_ACCESS_KEY_ID="${params.awsAccessKeyId}"
+                export AWS_SECRET_ACCESS_KEY="${params.awsSecretAccessKey}"
+                set -x
+                aws eks update-kubeconfig --name "${params.kubernetesClusterName}" --verbose
+                cd cloudops-for-kubernetes
+                lib/get-and-describe-all-resources.sh "test-cluster"
+              """
+
+            } else {
+              echo "Error: loginToKubernetesCluster unimplemented for cloud ${cloud}"
+            }
+            archiveArtifacts artifacts: 'cloudops-for-kubernetes/test-cluster-all-resources.yaml'
+            archiveArtifacts artifacts: 'cloudops-for-kubernetes/test-cluster-all-resource-descriptions.txt'
+          } catch(Exception e) {
+            print "failed to get and describe all Kubernetes resources for test Kubernetes cluster due to:\n" + e.getMessage()
+          }
+
+          // switch back to the CI server cluster
+          eplib.loginToCloud()
+          eplib.loginToKubernetesCluster("${kubernetesClusterName}")
+
+          if( "${params.cleanupResourceGroup}" == "true" ) {
+            labelledShell label: 'Run the bootstrap container in cleanup mode', script: """
+              # env vars for running the bootstrap container:
+              export UUID="${cleanupUuid}"
+              export RESOURCE_UUID="${resourceUuid}"
+
+              export REGISTRY_ADDRESS="${dockerRegistryAddress}"
+              export DOCKER_IMAGE_TAG="${cloudopsImageTag}"
+              export CLOUD="${cloud}"
+
+              if [ "${cloud}" = "azure" ]; then
+                export AZ_SUBSCRIPTION_ID="${params.azureSubscriptionId}"
+                export AZ_TENANT_ID="${params.azureServicePrincipalTenantId}"
+                export AZ_SP_APP_ID="${params.azureServicePrincipalAppId}"
+                export AZURE_RESOURCE_GROUP_NAME="${params.resourceGroup}"
+                export LOCATION="${params.location}"
+                export AKSNODEVMSIZE="${params.aksNodeVMSize}"
+                export AKSNODECOUNT="${params.aksNodeCount}"
+                export AKS_PUBLIC_SSH_KEY="\$(cat cloudops-for-kubernetes/id_rsa_kubernetes_cluster.pub)"
+                export AZ_SP_PASSWORD_ID_KEY="service-principal-password"
+
+                export AWS_ACCESS_KEY_ID_CI=""
+                export REGION=""
+                export AWS_EKS_INSTANCE_TYPE=""
+                export AWS_EKS_NODE_COUNT=""
+                export EKS_PUBLIC_SSH_KEY=""
+                export AWS_SECRET_ACCESS_KEY_CI="aws-secret-access-key"
+
+              elif [ "${cloud}" = "aws" ]; then
+                export AZ_SUBSCRIPTION_ID=""
+                export AZ_TENANT_ID=""
+                export AZ_SP_APP_ID=""
+                export AZURE_RESOURCE_GROUP_NAME=""
+                export LOCATION=""
+                export AKSNODEVMSIZE=""
+                export AKSNODECOUNT=""
+                export AKS_PUBLIC_SSH_KEY=""
+                export AZ_SP_PASSWORD_ID_KEY="service-principal-password"
+
+                export AWS_ACCESS_KEY_ID_CI="${params.awsAccessKeyId}"
+                export REGION="${params.region}"
+                export AWS_EKS_INSTANCE_TYPE="${params.eksInstanceType}"
+                export AWS_EKS_NODE_COUNT="${params.eksNodeCount}"
+                export EKS_PUBLIC_SSH_KEY="\$(cat cloudops-for-kubernetes/id_rsa_kubernetes_cluster.pub)"
+                export AWS_SECRET_ACCESS_KEY_CI="aws-secret-access-key"
+              fi
+
+              export BOOTSTRAP_MODE="cleanup"
+
+              export DOMAIN_NAME="${params.domainName}"
+              export KUBERNETES_CLUSTER_NAME="${params.kubernetesClusterName}"
+              export AZURE_RESOURCE_GROUP_NAME="${params.resourceGroup}"
+              export LOCATION="${params.location}"
+              export K8S_API_SERVER_AUTHORIZED_IP_RANGES='[ "${jenkinsServerPublicIP}" ]'
+              export EP_NEXUS_USER="${params.epRepositoryUser}"
+
+              export EP_CORTEX_MAVEN_REPO_URL="${params.epCortexMavenRepoUrl}"
+              export EP_COMMERCE_ENGINE_MAVEN_REPO_URL="${params.epCommerceEngineMavenRepoUrl}"
+              export EP_ACCELERATORS_MAVEN_REPO_URL="${params.epAcceleratorsMavenRepoUrl}"
+              export JENKINS_ALLOWED_CIDR="${formattedJenkinsList}"
+              export NEXUS_ALLOWED_CIDR="${formattedNexusList}"
+
+              export JDK_DOWNLOAD_URI="${params.oracleJdkDownloadUrl}"
+              export JDK_FOLDER_NAME="${params.jdkFolderName}"
+              export TOMCAT_VERSION="${params.tomcatVersion}"
+              export DEFAULT_AM_RELEASE_PACKAGE_URL="${defaultAmReleasePackageUrl}"
+              export SSH_HOST_KEY="${params.gitSSHHostKey}"
+              export EP_KUBERNETES_REPO_URL="${params.cloudOpsForKubernetesRepoURL}"
+              export EP_KUBERNETES_BRANCH="${params.cloudOpsForKubernetesBranch}"
+              export EP_COMMERCE_REPO_URL="${params.epCommerceRepoURL}"
+              export EP_COMMERCE_BRANCH="${params.epCommerceBranch}"
+              export EP_DOCKER_REPO_URL="${params.dockerRepoURL}"
+              export EP_DOCKER_BRANCH="${params.dockerBranch}"
+
+              export K8S_SECRET="bootstrap-secret-${sharedUuid}"
+
+              export EP_NEXUS_PASSWORD_KEY="ep-nexus-password"
+              export PRIVATE_SSH_KEY_KEY="git-repo-private-ssh-key"
+
+              mo --fail-not-set cloudops-for-kubernetes/jenkins/jobs/cloudops-for-kubernetes-ci/bootstrap-kubernetes.yaml.mo-template \
+                > cloudops-for-kubernetes/bootstrap.yaml
+              kubectl -n ${params.kubernetesNamespace} create -f cloudops-for-kubernetes/bootstrap.yaml
+
+              # wait for pod to appear
+              export KUBERNETES_NAMESPACE="${params.kubernetesNamespace}"
+              export JOB_NAME="kubernetes-bootstrap-${cleanupUuid}"
+              chmod +x cloudops-for-kubernetes/lib/wait-for-pod.sh
+              cloudops-for-kubernetes/lib/wait-for-pod.sh
+            """
+            labelledShell label: 'Delete generated Kubernetes secret', script: """
+              kubectl delete secret -n ${params.kubernetesNamespace} "bootstrap-secret-${sharedUuid}"
+            """
+
+            // delete NS record in parent zone
+            def zoneName = "${params.domainName}".trim()
+            def parentZoneName = "${params.zoneForNSRecord}".trim()
+
+            if (cloud.equals("azure")) {
+              def resourceGroupForParentZone = "${params.resourceGroupForParentZone}".trim()
+
+              // generate the name of the record
+              // e.g. if the parent zone is cloud.example.com and the zone created by the bootstrap container
+              // is alice.dev.cloud.example.com, the record name would be alice.dev
+              def nsRecordName = zoneName.substring(0, zoneName.lastIndexOf(zoneForNSRecord) - 1);
+
+              labelledShell label: 'Delete the NS record', script: """
+                az network dns record-set ns delete --yes --resource-group "${resourceGroupForParentZone}" --zone-name "${parentZoneName}" --name "${nsRecordName}"
+              """
+            } else if (cloud.equals("aws")) {
+              labelledShell label: 'Create NS record change batch', script: """
+                cat change_batch.json | jq '.| {Changes: [{Action: "DELETE", ResourceRecordSet: .Changes[0].ResourceRecordSet}]}' > delete_batch.json
+                cat delete_batch.json
+              """
+
+              labelledShell label: 'Delete NS record in parent zone', script: """
+                aws route53 change-resource-record-sets --hosted-zone-id "${eksParentHostZoneId}" --change-batch file://delete_batch.json
+              """
+            }
+          }
+        }
+      }
+    }
+  }
+}

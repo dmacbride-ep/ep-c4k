@@ -1,0 +1,490 @@
+version: '2.1'
+services:
+  kubernetes-bootstrap:
+    build: .
+    container_name: kubernetes-bootstrap
+    environment:
+
+      #############################################
+      ### Elastic Path CloudOps for Kubernetes
+      ###
+      ### Documentation: https://documentation.elasticpath.com/cloudops-kubernetes
+      #############################################
+      #
+      # Enter one of the following:
+      #    "setup"                  // creates a new Kubernetes cluster (the hub cluster) with Jenkins and Nexus
+      #    "setup-new-cluster"      // sets up an additional Kubernetes cluster which can be deployed to from the hub Kubernetes cluster
+      #    "cleanup"                // removes everything created during the "setup" mode
+      #    "show"                   // displays outputs from all Terraform workspaces
+      #    "create-terraform-files" // creates files required to work with Terraform directly
+      # See docs at https://documentation.elasticpath.com/cloudops-kubernetes/docs/setup/bootstrap.html
+      #
+      # For example:
+      #    TF_VAR_bootstrap_mode: "cleanup"
+      TF_VAR_bootstrap_mode: "setup"
+
+      #############################################
+      ### Cloud Agnostic Settings
+      #############################################
+
+      # The DNS zone for all Kubernetes clusters created using the bootstrap container.
+      # Records are created in the zone pointing to the load balancer for the Ingress Controller in each Kubernetes cluster.
+      # Note: You must ensure that your DNS service points to the DNS servers listed in the NS record for the zone.
+      #       See the CloudOps for Kubernetes documentation:
+      #       https://documentation.elasticpath.com/cloudops-kubernetes/docs/setup/post-bootstrap.html#updating-dns-nameservers
+      #
+      # Example of "TF_VAR_domain":
+      #    "ep.mycompany.com"
+      TF_VAR_domain: ""
+
+      # The DNS names for self-signed certificates
+      # Example of "TF_VAR_self_signed_cert_sans":
+      #     '[ "*.kubernetesci.kubernetes.epcloudops.com" ]'
+      TF_VAR_self_signed_cert_sans: '[ ]'
+
+      # The cloud against which the bootstrap container will run
+      # Valid values are "aws" or "azure"
+      TF_VAR_cloud: ""
+
+      # The name of the Kubernetes cluster
+      TF_VAR_kubernetes_cluster_name: ""
+
+      # Whether to install the agent for New Relic
+      TF_VAR_enable_new_relic_agent: "false"
+
+      # The license key required to use New Relic. Please contact New Relic to get this.
+      # Example of "TF_VAR_new_relic_license_key":
+      #     'dvnj2r8wnua4kp1tbw3o3rva43cj3yfc4ddkNRAL'
+      TF_VAR_new_relic_license_key: ""
+
+      # The name of the cluster set in New Relic
+      TF_VAR_new_relic_cluster_name: ""
+
+      #############################################
+      ### AWS Settings
+      #############################################
+
+      # For guidance on the settings in this section, see the CloudOps for Kubernetes documentation:
+      # https://documentation.elasticpath.com/cloudops-kubernetes/docs/setup/preparations.html
+
+      # The AWS Access Key which will be used to create all AWS resources required by the bootstrap container
+      # and from within Jenkins.
+      # Example of "TF_VAR_aws_access_key_id":
+      #     "AKIAIOSFODNN7EXAMPLE"
+      TF_VAR_aws_access_key_id: ""
+
+      # The AWS Secret Acess Key which will be used to create all AWS resources required by the bootstrap container
+      # and from within Jenkins.
+      # Example of "TF_VAR_aws_secret_access_key":
+      #     "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+      TF_VAR_aws_secret_access_key: ""
+
+      # The AWS region into which all AWS resources are created.
+      # Since AWS' Elastic Kubernetes Service (EKS) is only available in some regions,
+      # please validate by checking:
+      #    https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/
+      #
+      # Example of "TF_VAR_aws_region":
+      #     "us-west-2"
+      TF_VAR_aws_region: ""
+
+      # Enter the name of the S3 Bucket that will be created and used as a backend for Terraform
+      # For more information, see Terraform's documentation on the s3 backend:
+      #    https://www.terraform.io/docs/backends/types/s3.html
+      #
+      # Example of "TF_VAR_aws_backend_s3_bucket"
+      #    "epexample"
+      TF_VAR_aws_backend_s3_bucket: ""
+
+      # Enter the name of the file in the S3 Bucket that will be created and used as a backend for Terraform
+      # For more information, see Terraform's documentation on the s3 backend:
+      #    https://www.terraform.io/docs/backends/types/s3.html
+      #
+      # Example of "TF_VAR_aws_backend_s3_bucket_key"
+      #    "epexample"
+      TF_VAR_aws_backend_s3_bucket_key: ""
+
+      # Enter the name of the DynamoDB table will be created and used for state locking of the backend for Terraform
+      # For more information, see Terraform's documentation on the s3 backend:
+      #    https://www.terraform.io/docs/backends/types/s3.html
+      #
+      # Example of "TF_VAR_aws_backend_dynamodb_table"
+      #    "epexample"
+      TF_VAR_aws_backend_dynamodb_table: ""
+
+      # Enter the size of the instances in the EKS cluster.
+      #
+      # NOTE:
+      #   For additional EKS cluster settings, see the bootstrap/eksctl.yaml.mo-template file.
+      #
+      # WARNING:
+      #   Unless modifications are made to cloudops-for-kubernetes, please ensure that a instance size with
+      #   at least 4 cores, 16GB of RAM, and support for io1 EBS volumes is used.
+      #
+      # To find a list of instance sizes, see:
+      #    https://aws.amazon.com/ec2/instance-types/
+      #
+      # Example "aws_eks_instance_type":
+      #    "m5a.xlarge"
+      aws_eks_instance_type: "m5a.xlarge"
+
+      # Enter the minimum nodes of worker node instances in the EKS cluster.
+      #
+      # Example "aws_eks_min_node_count":
+      #    "1"
+      aws_eks_min_node_count: "1"
+
+      # Enter the content of the ssh public key to use for accessing the worker nodes of the EKS cluster.
+      #
+      # WARNING:
+      #   It is strongly advised that you generate a unique ssh key pair for the EKS cluster.
+      #
+      # Example "aws_eks_ssh_key":
+      #    "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAA...9IFVpw6F johndoe@WinPC-1234.local"
+      aws_eks_ssh_key: ""
+
+      # A list of additional ECR repositories to create. Supports namespaced
+      # repositories as show in the example.
+      #
+      # Example:
+      # TF_VAR_additional_ecr_repos: '[ "foo/bar", "bar" ]'
+      TF_VAR_additional_ecr_repos: '[ ]'
+
+      #############################################
+      ### Azure Settings
+      #############################################
+
+      # For guidance on the settings in this section, see the CloudOps for Kubernetes documentation:
+      # https://documentation.elasticpath.com/cloudops-kubernetes/docs/setup/preparations.html
+
+      # In the Azure CLI, login with `az login`.
+      # From the "az account list" command, use "id".
+      #
+      # Example of "TF_VAR_azure_subscription_id":
+      #     "4295b80a-5975-16ad-bf1f-6586fb219386"
+      TF_VAR_azure_subscription_id: ""
+
+      # From the `az ad sp create-for-rbac` command, use "tenantId".
+      #
+      # Example of "TF_VAR_azure_service_principal_tenant_id":
+      #     "4295b80a-5975-16ad-bf1f-6586fb219386"
+      TF_VAR_azure_service_principal_tenant_id: ""
+
+      # From the `az ad sp create-for-rbac` command, use "appId".
+      #
+      # Example of "TF_VAR_azure_service_principal_app_id":
+      #    "4295b80a-5975-16ad-bf1f-6586fb219386"
+      TF_VAR_azure_service_principal_app_id: ""
+
+      # From the `az ad sp create-for-rbac` command, use "password".
+      # For requirements to create the "password", see:
+      #    https://docs.microsoft.com/en-us/azure/active-directory/authentication/concept-sspr-policy#userprincipalname-policies-that-apply-to-all-user-accounts
+      #
+      # Example of "TF_VAR_azure_service_principal_password"
+      #    "246R9C0mEZRhNLpassGjITOM0s4jXmyh"
+      TF_VAR_azure_service_principal_password: ""
+
+      # Enter the name of the Resource Group that all resources will be put in.
+      # This Resource Group must exist before the bootstrap container is run.
+      #
+      # Example of "TF_VAR_azure_resource_group_name"
+      #    "epexamplerg"
+      TF_VAR_azure_resource_group_name: ""
+
+      # Enter the location or region of all the resources that are created in Azure.
+      # Ensure that you choose a location which supports all of the Azure services that Elastic Path requires,
+      # such as AKS and Azure Database for MySQL.
+      #
+      # For more information, see the support matrix:
+      #    https://azure.microsoft.com/en-ca/global-infrastructure/services/.
+      #
+      # For a list of short names, run the command:
+      #    az account list-locations | jq -r '.[].name'
+      #
+      # Example "TF_VAR_azure_location" (Note: Use the short version of the name):
+      #    "westus"
+      TF_VAR_azure_location: ""
+
+      # Enter the name of the Azure Storage Account that will be created and used as a backend for Terraform
+      # For more information, see Terraform's documentation on the azurerm backend:
+      #    https://www.terraform.io/docs/backends/types/azurerm.html
+      #
+      # Example of "TF_VAR_azure_backend_storage_account_name"
+      #    "epexamplesa"
+      TF_VAR_azure_backend_storage_account_name: ""
+
+      # Enter the name of the Container in the Azure Storage Account that will be created and used as a backend for Terraform
+      # For more information, see Terraform's documentation on the azurerm backend:
+      #    https://www.terraform.io/docs/backends/types/azurerm.html
+      #
+      # Example of "TF_VAR_azure_backend_container_name"
+      #    "epexamplecon"
+      TF_VAR_azure_backend_container_name: ""
+
+      # Enter the name of the Blob in the Container that will be created and used as a backend for Terraform
+      # For more information, see Terraform's documentation on the azurerm backend:
+      #    https://www.terraform.io/docs/backends/types/azurerm.html
+      #
+      # Example of "TF_VAR_azure_backend_blob_name"
+      #    "epexampleblob"
+      TF_VAR_azure_backend_blob_name: ""
+
+      # Enter the name of the Azure Container Registry (ACR) that will be created by the bootstrap container
+      # For more information, see Azure's documentation on ACR:
+      #    https://docs.microsoft.com/en-ca/azure/container-registry/
+      #
+      # Example of "TF_VAR_azure_acr_instance_name"
+      #    "epexample"
+      TF_VAR_azure_acr_instance_name: ""
+
+      # Enter the size of the virtual machines in the AKS cluster.
+      #
+      # WARNING:
+      #   Unless modifications are made to cloudops-for-kubernetes, please ensure that a virtual machine with
+      #   at least 4 cores, 14GB of RAM, and support for Premium Storage is used.
+      #
+      # To find a list of VMs sizes, see:
+      #    https://docs.microsoft.com/en-us/azure/virtual-machines/linux/sizes
+      #
+      # Note: not all of the sizes shown are supported in AKS.
+      #       To validate if a particular VM size is supported, please contact Azure Support.
+      #
+      # Example "TF_VAR_azure_aks_vm_size":
+      #    "Standard_F8s_v2" (for production)
+      #    "Standard_B4ms"   (for a developer grade nodes)
+      TF_VAR_azure_aks_vm_size: "Standard_B4ms"
+
+      # The starting number of virtual machines in the AKS cluster.
+      # There must be at least one virtual machine and can be no more than 100.
+      #
+      # For more details on the upper limit, please see:
+      #    https://docs.microsoft.com/en-us/azure/azure-subscription-service-limits#kubernetes-service-limits
+      # Example "TF_VAR_azure_aks_min_node_count":
+      #    "5"
+      TF_VAR_azure_aks_min_node_count: "1"
+
+      # The IP address CIDRs for IPs that are allowed to access the Kubernetes API in the Kubernetes cluster
+      #
+      # To find your public IP address, Google search for "what's my ip" and it will respond with your public IP address.
+      #
+      # Example `TF_VAR_azure_k8s_api_server_authorized_ip_ranges` IP address to use if your public IP address is 1.2.3.4
+      #  and you also want to grant access to the IP 5.6.7.8:
+      #    "[ "1.2.3.4/32","5.6.7.8/32" ]"
+      TF_VAR_azure_k8s_api_server_authorized_ip_ranges: '[ ]'
+
+      # Enter the content of the ssh public key to use for accessing the nodes of the AKS cluster.
+      #
+      # WARNING:
+      #   It is strongly advised that you generate a unique ssh key pair for the AKS cluster.
+      #   Microsoft's current pattern for accessing nodes in the ssh cluster involves copying the ssh
+      #   private key into a container in the cluster.
+      #   For more information, see:
+      #      https://docs.microsoft.com/en-us/azure/aks/ssh.
+      # Example "TF_VAR_azure_aks_ssh_key":
+      #    "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAA...9IFVpw6F johndoe@WinPC-1234.local"
+      TF_VAR_azure_aks_ssh_key: ""
+
+      #############################################
+      ### Nexus Settings
+      #############################################
+
+      # The IP address CIDRs for IPs that are allowed to access Nexus
+      #
+      # To find your public IP address, Google search for "what's my ip" and it will respond with your public IP address.
+      #
+      # Example `TF_VAR_nexus_allowed_cidr` to use if your public IP address is 1.2.3.4:
+      #    "1.2.3.4/32"
+      # Example `TF_VAR_nexus_allowed_cidr` to use if you want to whitelist IP addresses 1.2.3.4 and 2.3.4.5:
+      #    "1.2.3.4/32,2.3.4.5/32"
+      TF_VAR_nexus_allowed_cidr: ""
+
+      # The username and password for Elastic Path's public artifact repository
+      #
+      # Example TF_VAR_ep_repository_user:
+      #    "johndoe"
+      # Example TF_VAR_ep_repository_password:
+      #    "P4szW0rd"
+      TF_VAR_ep_repository_user: ""
+      TF_VAR_ep_repository_password: ""
+
+      # The URLs of Elastic Path Maven repositories
+      # Should be left as default values unless otherwise directed
+      TF_VAR_ep_cortex_maven_repo_url: "https://repository.elasticpath.com/nexus/content/repositories/cortex/"
+      TF_VAR_ep_commerce_engine_maven_repo_url: "https://repository.elasticpath.com/nexus/content/repositories/commerce-engine/"
+      TF_VAR_ep_accelerators_maven_repo_url: "https://repository.elasticpath.com/nexus/content/repositories/accelerators/"
+
+      #############################################
+      ### Jenkins Settings
+      #############################################
+
+      # The IP address CIDR for IPs that are allowed to access Jenkins
+      #
+      # To find your public IP address, Google search for "what's my ip" and it will respond with your public IP address.
+      #
+      # Example `TF_VAR_jenkins_allowed_cidr` to use if your public IP address is 1.2.3.4:
+      #    "1.2.3.4/32"
+      # Example `TF_VAR_jenkins_allowed_cidr` to use if you want to whitelist IP addresses 1.2.3.4 and 2.3.4.5:
+      #    "1.2.3.4/32,2.3.4.5/32"
+      TF_VAR_jenkins_allowed_cidr: ""
+
+      # Trust all certificates
+      # If your remote Jenkins host has a self-signed certificate or its certificate is not trusted, you may want to
+      #     enable this option. If enabled, it will accept untrusted certificates for the given host.
+      #
+      # Example `TF_VAR_jenkins_trust_all_certificates`:
+      #     "true"
+      TF_VAR_jenkins_trust_all_certificates: "false"
+
+      # The username (TF_VAR_nexus_repo_username) and password (TF_VAR_nexus_repo_password) Jenkins will use to connect to the repository on the Nexus instance.
+      #
+      # These values should only be changed if a separate Nexus server, not deployed by CloudOps for Kubernetes, is being used.
+      # If you are using the Nexus server that is provided by CloudOps for Kubernetes, do not change these values.  A user with these
+      # credentials will be created automatically by the bootstrap process.
+      #
+      # If you are using a separate Nexus server, it is assumed that this user already exists and a new user will not be created.
+      #
+      # Example default values:
+      #    nexusRepoUsername: "admin"
+      #    nexusRepoPassword: "admin123"
+      TF_VAR_nexus_repo_username: "admin"
+      TF_VAR_nexus_repo_password: "admin123"
+
+      # Address of the Nexus server.
+      # If you are using the Nexus server that is deployed by default, use the Example default value of TF_VAR_nexus_base_uri.
+      #
+      # Example default value of TF_VAR_nexus_base_uri:
+      #    "http://ep-nexus-service:8081"
+      TF_VAR_nexus_base_uri: "http://ep-nexus-service:8081"
+
+      # JDK download URL
+      # Requirements:
+      #  - Must be a tar.gz file
+      #  - Must be the linux-x64 version
+      #
+      # Example TF_VAR_oracle_jdk_download_url:
+      #    "https://cdn.azul.com/zulu/bin/zulu8.36.0.1-ca-jdk8.0.202-linux_x64.tar.gz"
+      TF_VAR_oracle_jdk_download_url: "https://cdn.azul.com/zulu/bin/zulu8.36.0.1-ca-jdk8.0.202-linux_x64.tar.gz"
+
+      # JDK folder name within the JDK download that contains the JDK
+      #
+      # Example TF_VAR_jdk_folder_name:
+      #   "zulu8.36.0.1-ca-jdk8.0.202-linux_x64"
+      TF_VAR_jdk_folder_name: "zulu8.36.0.1-ca-jdk8.0.202-linux_x64"
+
+      # Maven download URL
+      #
+      # Example TF_VAR_maven_download_url:
+      #    "https://archive.apache.org/dist/maven/maven-3/3.6.2/binaries/apache-maven-3.6.2-bin.tar.gz"
+      TF_VAR_maven_download_url: "https://archive.apache.org/dist/maven/maven-3/3.6.2/binaries/apache-maven-3.6.2-bin.tar.gz"
+
+      # Maven folder name inside the .tar.gz file download that contains the required files
+      #
+      # Example TF_VAR_maven_folder_name:
+      #    "apache-maven-3.6.2"
+      TF_VAR_maven_folder_name: "apache-maven-3.6.2"
+
+      # Tomcat version number to use for building the Tomcat base image
+      # Requirements:
+      # - For EP Commerce 7.5 and 7.6 use "9.0.16"
+      #
+      TF_VAR_tomcat_version: "9.0.16"
+
+      # Default Account Management release package URL.
+      # Used as the default Jenkins parameter value when building Account Management Docker images.
+      #
+      # Example TF_VAR_default_account_management_release_package_url:
+      #    "https://repository.elasticpath.com/nexus/content/repositories/public/com/elasticpath/account-management/2.4.0/account-management-2.4.0.zip"
+      TF_VAR_default_account_management_release_package_url: "https://repository.elasticpath.com/nexus/content/repositories/public/com/elasticpath/account-management/2.4.0/account-management-2.4.0.zip"
+
+      # Git server username
+      # Allows you to use a different Git username.
+      # For example, to use a different Git username with AWS CodeCommit.
+      #
+      # Example TF_VAR_git_credential_username:
+      #    "git"
+      TF_VAR_git_credential_username: "git"
+
+      # The SSH host key provided by the Git service that is being used.
+      #
+      # This key will be added to the known_hosts file on the jenkins server so that it automatically trusts connections to the
+      # Git provider.
+      #
+      # If you are using Azure as your Git provider, the SSH host key and fingerprint can be found at:
+      #    https://docs.microsoft.com/en-us/azure/devops/repos/git/use-ssh-keys-to-authenticate?view=azure-devops
+      # If you are using AWS as your Git provider, the SSH host key fingerprints for each region can be found at:
+      #    https://docs.aws.amazon.com/codecommit/latest/userguide/regions.html#regions-fingerprints
+      # To download the host key and find its fingerprint, use the ssh-keyscan command, for example, if you are using Azure as your Git provider:
+      #   ssh-keyscan ssh.dev.azure.com
+      #
+      # To validate the host key fingerprint, use the ssh-keygen command with the '-l -f' flags.
+      #
+      # Example TF_VAR_git_ssh_host_key:
+      #    "ssh.dev.azure.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAA...TISQBtdcyPaEno7fFQMDD26/s0lfKob4Kw8H"
+      TF_VAR_git_ssh_host_key: ""
+
+      # Git repository of the cloudops-for-kubernetes code
+      #
+      # Example TF_VAR_cloudops_for_kubernetes_repo_url:
+      #    "git@ssh.dev.azure.com:v3/MyName/myproject/cloudops-for-kubernetes"
+      TF_VAR_cloudops_for_kubernetes_repo_url: ""
+
+      # The default Git branch to use in Jenkins for the cloudops-for-kubernetes repository
+      #
+      # Example TF_VAR_cloudops_for_kubernetes_default_branch:
+      #    "master"
+      TF_VAR_cloudops_for_kubernetes_default_branch: "master"
+
+      # The Git address of the ep-commerce code
+      #
+      # Example TF_VAR_ep_commerce_repo_url:
+      #    "git@ssh.dev.azure.com:v3/MyName/myproject/ep-commerce"
+      TF_VAR_ep_commerce_repo_url: ""
+
+      # The default Git branch to use in Jenkins for the ep-commerce repository
+      #
+      # Example TF_VAR_ep_commerce_default_branch:
+      #    "master"
+      TF_VAR_ep_commerce_default_branch: "master"
+
+      # The Git address of the docker code
+      #
+      # Example TF_VAR_docker_repo_url:
+      #    "git@ssh.dev.azure.com:v3/MyName/myproject/docker"
+      TF_VAR_docker_repo_url: ""
+
+      # The default Git branch to use in Jenkins for the docker repository
+      #
+      # Example TF_VAR_docker_default_branch:
+      #    "master"
+      TF_VAR_docker_default_branch: "master"
+
+    volumes:
+      # The path to the SSH private key that will be used for Git repository authentication:
+      # * The first half of the path points to the location of the file on the machine where the container is being run.
+      # * The second half is left unchanged.
+      # Note: cloudops-for-kubernetes does not support Git SSH keys with password protection
+      #
+      # Example volume path:
+      #- /path/to/kubernetes_git_id_rsa:/secrets/git_id_rsa
+      #
+      # The paths to the TLS certificate and private key. These are assigned to the Ingress Controller.
+      # * The first half of the path points to the location of the file on the machine where the container is being run.
+      # * The second half is left unchanged.
+      # Note: by default a self signed cert is created if the below values not populated
+      #
+      # Example volume path:
+      #- /path/to/haproxy_default_cert.crt:/secrets/haproxy_default_cert.crt
+      #- /path/to/haproxy_default_cert.key:/secrets/haproxy_default_cert.key
+      #
+      # The path to the extra nexus repository configuration. This configuration will be appended to the <repositories>
+      # section of the nexus.xml config file.
+      # Note: this is only required if there are additional repositories you would like the Nexus instance to mirror
+      #
+      # Example volume path:
+      #- /path/to/extra-nexus-repositories.xml:/extras/extra-nexus-repositories.xml
+      #
+      # The path to the root of the cloudops-for-kubernetes code:
+      # * The first half of the path points to the location of the root of the repository on the machine where the container is being run.
+      # * The second half is left unchanged.
+      # Note: this is only required when running the bootstrap container in "create-terraform-files" mode
+      #- /path/to/cloudops-for-kubernetes:/localcode/

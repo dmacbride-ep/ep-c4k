@@ -1,0 +1,119 @@
+// this bit is just plain Jenkins Groovy
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+def randomLabel = "jenkins-worker-${UUID.randomUUID().toString()}"
+def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
+def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+
+// this is a workaround until this bug is fixed: https://issues.jenkins-ci.org/browse/JENKINS-56943
+def podYamlFromFile = new File("${env.JENKINS_HOME}/workspace/build-deployment-package@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/maven-8gb-2core-1container.yaml").text.trim();
+String podYaml = podYamlFromFile.replace('${dockerRegistryAddress}', "${dockerRegistryAddress}").replace('${jenkinsAgentImageTag}', "${jenkinsAgentImageTag}")
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent {
+    kubernetes {
+      label "${randomLabel}"
+      defaultContainer "jnlp"
+      yaml "${podYaml}"
+    }
+  }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
+    timeout(time: 3, unit: 'HOURS')
+      }
+  stages {
+    stage('Load EP Groovy Library') {
+      steps {
+        container('maven') {
+          script {
+            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+          }
+        }
+      }
+    }
+    stage('Checkout code') {
+      steps {
+        container('maven') {
+          dir ('ep-commerce') {
+            script {
+              eplib.gitShallowClone("${params.epCommerceRepoURL}", "${params.epCommerceBranch}", "${params.epCommerceCredentialId}")
+            }
+          }
+        }
+      }
+    }
+    stage('Configure Maven') {
+      steps {
+        container('maven') {
+          sh """
+          mkdir -p ~/.m2/
+          cp ep-commerce/devops/maven/ci-settings.xml ~/.m2/settings.xml
+
+          echo "replacing following strings in maven settings with real values: MAVEN_DEPLOYER_USER_NAME, MAVEN_DEPLOYER_PASSWORD, PROJECT_REPOSITORY_GROUP_URL, PROJECT_RELEASE_REPOSITORY_URL and PROJECT_SNAPSHOT_REPOSITORY_URL"
+          sed -i "s/MAVEN_DEPLOYER_USER_NAME/${nexusRepoUsername}/g" ~/.m2/settings.xml
+          sed -i "s/MAVEN_DEPLOYER_PASSWORD/${nexusRepoPassword}/g" ~/.m2/settings.xml
+          sed -i "s|PROJECT_REPOSITORY_GROUP_URL|${nexusBaseUri}/nexus/content/groups/ep-repository-group/|g" ~/.m2/settings.xml
+          sed -i "s|PROJECT_RELEASE_REPOSITORY_URL|${nexusBaseUri}/nexus/content/repositories/ep-releases/|g" ~/.m2/settings.xml
+          sed -i "s|PROJECT_SNAPSHOT_REPOSITORY_URL|${nexusBaseUri}/nexus/content/repositories/ep-snapshots/|g" ~/.m2/settings.xml
+          """
+        }
+      }
+    }
+    stage('Setting the ep-commerce version') {
+      steps {
+        container('maven') {
+          sh """
+          cd ep-commerce
+          epCommerceVersion=\$(xmlstarlet sel -N ns=http://maven.apache.org/POM/4.0.0 -t -m ns:project -v ns:version commerce-engine/pom.xml | sed 's/-SNAPSHOT//g')
+          cleanedEpCommerceBranch=\$(echo "${params.epCommerceBranch}" | tr '/.-' '_')
+          epCommercePlatformAndExtensionVersion="\${epCommerceVersion}.\${cleanedEpCommerceBranch}_\$(uuid | tr -d '-')"
+          echo "running versioning script with EP Commerce and extension version: \${epCommercePlatformAndExtensionVersion}"
+          ./devops/scripts/set-ep-versions.sh \
+            \${epCommercePlatformAndExtensionVersion} \
+            \${epCommercePlatformAndExtensionVersion}
+          echo "{ \\"epCommercePlatformAndExtensionVersion\\": \\"\${epCommercePlatformAndExtensionVersion}\\" }" > ../output.json
+          """
+        }
+      }
+    }
+    stage('Build and push deployment package') {
+      steps {
+        container('maven') {
+          sh """
+            cd ep-commerce
+            export MAVEN_OPTS="-Xmx8192m"
+            export MAVEN_COMMON_ARGS="-U -B -V -e -DskipAllTests -Daether.artifactDescriptor.threads=16 -Dmaven.artifact.threads=16 -Dmaven.wagon.http.retryHandler.count=10"
+
+            mvn install \${MAVEN_COMMON_ARGS} -f bill-of-materials/pom.xml
+            mvn deploy \${MAVEN_COMMON_ARGS} -f pom.xml -N
+            mvn install \${MAVEN_COMMON_ARGS} -f commerce-data/pom.xml -T 3
+            mvn install \${MAVEN_COMMON_ARGS} -f commerce-engine/pom.xml -T 3
+            mvn install \${MAVEN_COMMON_ARGS} -f health-monitoring/pom.xml -T 3
+            mvn install \${MAVEN_COMMON_ARGS} -f commerce-manager/pom.xml
+            mvn install \${MAVEN_COMMON_ARGS} -f cortex-resources/pom.xml -T 3
+            mvn install \${MAVEN_COMMON_ARGS} -f extensions/pom.xml
+
+            mvn deploy \${MAVEN_COMMON_ARGS} -f extensions/packager/ext-deployment-package/pom.xml
+
+            # build specific EP-Commerce projects required by the Cortex system tests
+            mvn deploy \${MAVEN_COMMON_ARGS} -f commerce-engine/pom.xml -N
+            mvn deploy \${MAVEN_COMMON_ARGS} -f commerce-engine/jms/pom.xml -N
+            mvn deploy \${MAVEN_COMMON_ARGS} -f commerce-engine/jms/ep-jms-test-support/pom.xml
+            mvn deploy \${MAVEN_COMMON_ARGS} -f commerce-engine/ep-query-analyzer/pom.xml	
+            mvn deploy \${MAVEN_COMMON_ARGS} -f extensions/pom.xml -N
+            mvn deploy \${MAVEN_COMMON_ARGS} -f extensions/cortex/pom.xml -N
+            mvn deploy \${MAVEN_COMMON_ARGS} -f extensions/cortex/system-tests/pom.xml -N
+            mvn deploy \${MAVEN_COMMON_ARGS} -f extensions/cortex/system-tests/definitions/pom.xml
+          """
+        }
+      }
+    }
+  }
+  post {
+    success {
+      archiveArtifacts artifacts: 'output.json'
+    }
+  }
+}

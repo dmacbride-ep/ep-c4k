@@ -1,0 +1,19 @@
+terraform {
+  # Version of Terraform to include in the bundle. An exact version number
+  # is required.
+  version = "{{TFVER}}"
+}
+
+# Define which provider plugins are to be included
+providers {
+  aws = ["~> 2.17"]
+  azurerm = ["= 1.37"]
+  helm = ["~> 0.10"]
+  kubernetes = ["~> 1.8"]
+  null = ["~> 2.1"]
+  template = ["~> 2.1"]
+  tls = ["~> 2.0"]
+  external = ["~> 1.2"]
+  random = ["~> 2.2"]
+  http = ["~> 1.1"]
+}

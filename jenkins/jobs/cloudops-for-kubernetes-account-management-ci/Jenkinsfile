@@ -1,0 +1,158 @@
+import org.apache.commons.io.FilenameUtils
+
+// this bit is just plain Jenkins Groovy
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+def randomLabel = "jenkins-worker-${UUID.randomUUID().toString()}"
+def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
+def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+
+// this is a workaround until this bug is fixed: https://issues.jenkins-ci.org/browse/JENKINS-56943
+def podYamlFromFile = new File("${env.JENKINS_HOME}/workspace/${env.JOB_NAME}@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/docker-1gb-1core-1container.yaml").text.trim();
+String podYaml = podYamlFromFile.replace('${dockerRegistryAddress}', "${dockerRegistryAddress}").replace('${jenkinsAgentImageTag}', "${jenkinsAgentImageTag}")
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent {
+    kubernetes { label "${randomLabel}" defaultContainer "jnlp" yaml "${podYaml}" }
+  }
+
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '90', artifactNumToKeepStr: '100'))
+  }
+
+  stages {
+    stage('Configure Docker image tag') {
+      steps {
+        container('docker1') {
+          script {
+            if ( ! params.docker_image_tag.trim() ) {
+              packageUrl = new URL("${params.release_package_url}")
+              imageTag = FilenameUtils.getBaseName(packageUrl.getPath())
+            } else {
+              imageTag = "${params.docker_image_tag}"
+            }
+          }
+        }
+      }
+    }
+    stage('Parallel Stage: Create MySQL database and build Docker images') {
+      parallel {
+        stage('Create MySQL database') {
+          steps {
+            container('docker1') {
+              script {
+                mysqlServerName = labelledShell( label: 'Generate server name', returnStdout: true, script: """
+                  echo "mysqlcontainer\$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 5 | head -n 1)"
+                """).trim()
+
+                build(
+                  job: "create-or-delete-account-management-mysql-container",
+                  parameters: [
+                    [name: 'plan_mode', value: params.plan_mode, $class: 'BooleanParameterValue'],
+                    [name: 'TF_VAR_database_name', value: "${mysqlServerName}", $class: 'StringParameterValue'],
+                    [name: 'TF_VAR_kubernetes_namespace', value: "${params.kubernetes_namespace}", $class: 'StringParameterValue'],
+                    [name: 'cluster_name', value: "${params.kubernetes_cluster_name}", $class: 'StringParameterValue'],
+                    [name: 'cloudops_for_kubernetes_branch', value: "${params.cloudops_for_kubernetes_branch}", $class: 'StringParameterValue']
+                  ]
+                )
+              }
+            }
+          }
+        }
+        stage('Build Docker images') {
+          when { expression { return params.release_package_url.trim() } }
+          steps {
+            container('docker1') {
+              script {
+                build(
+                  job: "build-docker-images-account-management",
+                  parameters: [
+                    [name: 'releasePackageUrl', value: "${params.release_package_url}", $class: 'StringParameterValue'],
+                    [name: 'imageTag', value: "${imageTag}", $class: 'StringParameterValue'],
+                    [name: 'cloudOpsForKubernetesBranch', value: "${params.cloudops_for_kubernetes_branch}", $class: 'StringParameterValue']
+                  ]
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+    stage('Deploy Account Management') {
+      steps {
+        container('docker1') {
+          script {
+            build(
+              job: "create-or-delete-account-management-stack",
+              parameters: [
+                [name: 'plan_mode', value: params.plan_mode, $class: 'BooleanParameterValue'],
+                [name: 'TF_VAR_docker_tag', value: "${imageTag}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_account_management_database_name', value: "${mysqlServerName}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_account_management_activemq_name', value: "${params.activemq_name}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_allowed_cidrs', value: "${params.allowed_cidrs}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_kubernetes_namespace', value: "${params.kubernetes_namespace}", $class: 'StringParameterValue'],
+                [name: 'private_jwt_key', value: "${params.private_jwt_key}", $class: 'com.michelin.cio.hudson.plugins.passwordparam.PasswordParameterValue'],
+                [name: 'TF_VAR_api_access_token', value: "${params.am_api_access_token}", $class: 'com.michelin.cio.hudson.plugins.passwordparam.PasswordParameterValue'],
+                [name: 'TF_VAR_oidc_discovery_url', value: "${params.oidc_discovery_url}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_oidc_client_id', value: "${params.oidc_client_id}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_oidc_client_secret', value: "${params.oidc_client_secret}", $class: 'com.michelin.cio.hudson.plugins.passwordparam.PasswordParameterValue'],
+                [name: 'TF_VAR_oidc_token_scope', value: "${params.oidc_token_scope}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_oidc_group_key', value: "${params.oidc_group_key}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_oidc_group_value_for_associates', value: "${params.oidc_group_value_for_associates}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_oidc_group_value_for_seller_users', value: "${params.oidc_group_value_for_seller_users}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_kubernetes_cluster_name', value: "${params.kubernetes_cluster_name}", $class: 'StringParameterValue'],
+                [name: 'cloudops_for_kubernetes_branch', value: "${params.cloudops_for_kubernetes_branch}", $class: 'StringParameterValue']
+              ]
+            )
+          }
+        }
+      }
+    }
+    stage('Clean up stack') {
+      when { expression { params.delete_stack == true } }
+      steps {
+        container('docker1') {
+          script {
+            build(
+              job: "create-or-delete-account-management-stack",
+              parameters: [
+                [name: 'plan_mode', value: params.plan_mode, $class: 'BooleanParameterValue'],
+                [name: 'destroy_mode', value: true, $class: 'BooleanParameterValue'],
+                [name: 'TF_VAR_docker_tag', value: "${params.docker_image_tag}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_account_management_database_name', value: "${mysqlServerName}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_account_management_activemq_name', value: "${params.activemq_name}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_allowed_cidrs', value: "${params.allowed_cidrs}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_kubernetes_namespace', value: "${params.kubernetes_namespace}", $class: 'StringParameterValue'],
+                [name: 'private_jwt_key', value: "${params.private_jwt_key}", $class: 'com.michelin.cio.hudson.plugins.passwordparam.PasswordParameterValue'],
+                [name: 'TF_VAR_api_access_token', value: "${params.am_api_access_token}", $class: 'com.michelin.cio.hudson.plugins.passwordparam.PasswordParameterValue'],
+                [name: 'TF_VAR_oidc_discovery_url', value: "${params.oidc_discovery_url}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_oidc_client_id', value: "${params.oidc_client_id}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_oidc_client_secret', value: "${params.oidc_client_secret}", $class: 'com.michelin.cio.hudson.plugins.passwordparam.PasswordParameterValue'],
+                [name: 'TF_VAR_oidc_token_scope', value: "${params.oidc_token_scope}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_oidc_group_key', value: "${params.oidc_group_key}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_oidc_group_value_for_associates', value: "${params.oidc_group_value_for_associates}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_oidc_group_value_for_seller_users', value: "${params.oidc_group_value_for_seller_users}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_kubernetes_cluster_name', value: "${params.kubernetes_cluster_name}", $class: 'StringParameterValue'],
+                [name: 'cloudops_for_kubernetes_branch', value: "${params.cloudops_for_kubernetes_branch}", $class: 'StringParameterValue']
+              ]
+            )
+
+            build(
+              job: "create-or-delete-account-management-mysql-container",
+              parameters: [
+                [name: 'plan_mode', value: params.plan_mode, $class: 'BooleanParameterValue'],
+                [name: 'destroy_mode', value: true, $class: 'BooleanParameterValue'],
+                [name: 'TF_VAR_database_name', value: "${mysqlServerName}", $class: 'StringParameterValue'],
+                [name: 'TF_VAR_kubernetes_namespace', value: "${params.kubernetes_namespace}", $class: 'StringParameterValue'],
+                [name: 'cluster_name', value: "${params.kubernetes_cluster_name}", $class: 'StringParameterValue'],
+                [name: 'cloudops_for_kubernetes_branch', value: "${params.cloudops_for_kubernetes_branch}", $class: 'StringParameterValue']
+              ]
+            )
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,161 @@
+// this bit is just plain Jenkins Groovy
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+def randomLabel = "jenkins-worker-${UUID.randomUUID().toString()}"
+def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
+def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+
+// this is a workaround until this bug is fixed: https://issues.jenkins-ci.org/browse/JENKINS-56943
+def podYamlFromFile = new File("${env.JENKINS_HOME}/workspace/run-cortex-system-tests@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/maven-8gb-2core-1container.yaml").text.trim();
+String podYaml = podYamlFromFile.replace('${dockerRegistryAddress}', "${dockerRegistryAddress}").replace('${jenkinsAgentImageTag}', "${jenkinsAgentImageTag}")
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent {
+    kubernetes {
+      label "${randomLabel}"
+      defaultContainer "jnlp"
+      yaml "${podYaml}"
+    }
+  }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
+    timeout(time: 1, unit: 'HOURS')
+      }
+  stages {
+    stage('Check job parameters') {
+      steps {
+        container('maven') {
+          script {
+            if ("${params.jmsServerName}" == "") {
+              error "jmsServerName parameter must be non-empty"
+            }
+          }
+        }
+      }
+    }
+    stage('Load EP Groovy Library') {
+      steps {
+        container('maven') {
+          script {
+            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+          }
+        }
+      }
+    }
+    stage('Checkout code') {
+      steps {
+        container('maven') {
+          dir ('ep-commerce') {
+            script {
+              eplib.gitShallowClone("${params.epCommerceRepoURL}", "${params.epCommerceBranch}", "${params.epCommerceCredentialId}")
+            }
+          }
+        }
+      }
+    }
+    stage('Configure Maven') {
+      steps {
+        container('maven') {
+          sh """
+          mkdir -p ~/.m2/
+          cp ep-commerce/devops/maven/ci-settings.xml ~/.m2/settings.xml
+
+          echo "replacing following strings in maven settings with real values: MAVEN_DEPLOYER_USER_NAME, MAVEN_DEPLOYER_PASSWORD, PROJECT_REPOSITORY_GROUP_URL, PROJECT_RELEASE_REPOSITORY_URL and PROJECT_SNAPSHOT_REPOSITORY_URL"
+          sed -i "s/MAVEN_DEPLOYER_USER_NAME/${nexusRepoUsername}/g" ~/.m2/settings.xml
+          sed -i "s/MAVEN_DEPLOYER_PASSWORD/${nexusRepoPassword}/g" ~/.m2/settings.xml
+          sed -i "s|PROJECT_REPOSITORY_GROUP_URL|${nexusBaseUri}/nexus/content/groups/ep-repository-group/|g" ~/.m2/settings.xml
+          sed -i "s|PROJECT_RELEASE_REPOSITORY_URL|${nexusBaseUri}/nexus/content/repositories/ep-releases/|g" ~/.m2/settings.xml
+          sed -i "s|PROJECT_SNAPSHOT_REPOSITORY_URL|${nexusBaseUri}/nexus/content/repositories/ep-snapshots/|g" ~/.m2/settings.xml
+          """
+        }
+      }
+    }
+    stage('Setting the ep-commerce version') {
+      steps {
+        container('maven') {
+          script {
+            copyArtifacts(projectName: 'build-deployment-package', filter: 'output.json', , target: '.',
+              parameters: "epCommerceRepoURL=" + "${params.epCommerceRepoURL}" + ",epCommerceBranch=" + "${params.epCommerceBranch}");
+            buildDeploymentPackageOutput = readJSON file: 'output.json'
+            assert buildDeploymentPackageOutput['epCommercePlatformAndExtensionVersion'] != ''
+            epCommercePlatformAndExtensionVersion = buildDeploymentPackageOutput['epCommercePlatformAndExtensionVersion']
+          }
+          sh """
+          cd ep-commerce
+          ./devops/scripts/set-ep-versions.sh \
+            "${epCommercePlatformAndExtensionVersion}" \
+            "${epCommercePlatformAndExtensionVersion}"
+          """
+        }
+      }
+    }
+    stage('Check that search index is populated') {
+      steps {
+        container('maven') {
+          script {
+            gk_check_search_index="http://ep-searchslave-service.${params.kubernetesNamespace}:8082/search/product/select?q=*:*&rows=0&wt=json"
+          }
+
+          sh """
+            apt-get update && apt-get -y install jq
+
+            gk_tries=30
+            gk_duration=30
+            gk_try=0
+            max_gatekeeper_sec=10
+
+            response_json=`curl --max-time \${max_gatekeeper_sec} -k ${gk_check_search_index}`
+            num_found=`echo \${response_json} | jq '.response.numFound'`
+
+            until [ \${num_found} -gt 0 ]; do
+              gk_try=\$((gk_try+1))
+              if [ \${gk_try} -eq \${gk_tries} ]; then
+                echo && echo "ERROR: Search index validation failed" && exit 1
+              fi
+              echo "INFO: Did not receive expected response code or string. Trying again in \${gk_duration} seconds (try \${gk_try} of \${gk_tries})."
+              sleep \${gk_duration}
+
+              response_json=`curl --max-time \${max_gatekeeper_sec} -k ${gk_check_search_index}`
+              num_found=`echo \${response_json} | jq '.response.numFound'`
+            done
+          """
+        }
+      }
+    }
+    stage('Run Cortex system tests') {
+      steps {
+        container('maven') {
+          script {
+            try {
+              sh"""
+                cd ep-commerce/extensions/cortex/system-tests/cucumber/
+
+                mvn -U \
+                    -B \
+                    -V \
+                    -e \
+                    -s ~/.m2/settings.xml \
+                    clean \
+                    verify \
+                    -P !setup-local-integration-test,pass-build-even-if-tests-fail \
+                    -f pom.xml \
+                    -Dep.rest.baseurl="http://ep-cortex-service.${params.kubernetesNamespace}:8080/cortex" \
+                    -Dep.jms.url="tcp://ep-activemq-${params.jmsServerName}-service.${params.kubernetesNamespace}:61616" \
+                    -Dtrinidad.exclude.filter=notready,bug,localonly,withTestResourceOnly \
+                    -Dit.test=CucumberRunnerIT \
+                    -Dmaven.clean.failOnError=false
+              """
+            } finally {
+              cucumber buildStatus: 'UNSTABLE',
+                       fileIncludePattern: '**/system-tests/cucumber/target/**/cucumber.json',
+                       fileExcludePattern: '**/package.json',
+                       sortingMethod: 'ALPHABETICAL'
+            }
+          }
+        }
+      }
+    }
+  }
+}

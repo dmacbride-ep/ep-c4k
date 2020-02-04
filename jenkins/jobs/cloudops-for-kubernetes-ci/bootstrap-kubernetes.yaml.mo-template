@@ -1,0 +1,154 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kubernetes-bootstrap-{{UUID}}
+spec:
+  ttlSecondsAfterFinished: 60
+  backoffLimit: 0
+  template:
+    spec:
+      containers:
+      - name: kubernetes-bootstrap-{{UUID}}
+        image: "{{REGISTRY_ADDRESS}}/bootstrap/kubernetes-bootstrap:{{DOCKER_IMAGE_TAG}}"
+        imagePullPolicy: Always
+        resources:
+          limits:
+            memory: "1024Mi"
+            cpu: "200m"
+          requests:
+            memory: "1024Mi"
+            cpu: "200m"
+        env:
+        - name: TF_VAR_bootstrap_mode
+          value: "{{BOOTSTRAP_MODE}}"
+        - name: TF_VAR_domain
+          value: "{{DOMAIN_NAME}}"
+        - name: TF_VAR_cloud
+          value: "{{CLOUD}}"
+        - name: TF_VAR_kubernetes_cluster_name
+          value: "{{KUBERNETES_CLUSTER_NAME}}"
+        - name: TF_VAR_azure_subscription_id
+          value: "{{AZ_SUBSCRIPTION_ID}}"
+        - name: TF_VAR_azure_service_principal_tenant_id
+          value: "{{AZ_TENANT_ID}}"
+        - name: TF_VAR_azure_service_principal_app_id
+          value: "{{AZ_SP_APP_ID}}"
+        - name: TF_VAR_azure_service_principal_password
+          valueFrom:
+            secretKeyRef:
+              name: {{K8S_SECRET}}
+              key: {{AZ_SP_PASSWORD_ID_KEY}}
+        - name: TF_VAR_azure_resource_group_name
+          value: "{{AZURE_RESOURCE_GROUP_NAME}}"
+        - name: TF_VAR_azure_location
+          value: "{{LOCATION}}"
+        - name: TF_VAR_azure_backend_storage_account_name
+          value: "{{AZURE_RESOURCE_GROUP_NAME}}sa"
+        - name: TF_VAR_azure_backend_container_name
+          value: "{{AZURE_RESOURCE_GROUP_NAME}}con"
+        - name: TF_VAR_azure_backend_blob_name
+          value: "{{AZURE_RESOURCE_GROUP_NAME}}blob"
+        - name: TF_VAR_azure_acr_instance_name
+          value: "{{AZURE_RESOURCE_GROUP_NAME}}"
+        - name: TF_VAR_azure_aks_vm_size
+          value: "{{AKSNODEVMSIZE}}"
+        - name: TF_VAR_azure_aks_min_node_count
+          value: "{{AKSNODECOUNT}}"
+        - name: TF_VAR_azure_k8s_api_server_authorized_ip_ranges
+          value: '{{K8S_API_SERVER_AUTHORIZED_IP_RANGES}}'
+        - name: TF_VAR_azure_aks_ssh_key
+          value: "{{AKS_PUBLIC_SSH_KEY}}"
+        - name: TF_VAR_aws_access_key_id
+          value: "{{AWS_ACCESS_KEY_ID_CI}}"
+        - name: TF_VAR_aws_secret_access_key
+          valueFrom:
+            secretKeyRef:
+              name: {{K8S_SECRET}}
+              key: {{AWS_SECRET_ACCESS_KEY_CI}}
+        - name: TF_VAR_aws_region
+          value: "{{REGION}}"
+        - name: TF_VAR_aws_backend_s3_bucket
+          value: "{{KUBERNETES_CLUSTER_NAME}}-bucket-{{RESOURCE_UUID}}"
+        - name: TF_VAR_aws_backend_s3_bucket_key
+          value: "{{KUBERNETES_CLUSTER_NAME}}-bucket-key-{{RESOURCE_UUID}}"
+        - name: TF_VAR_aws_backend_dynamodb_table
+          value: "{{KUBERNETES_CLUSTER_NAME}}-db-{{RESOURCE_UUID}}"
+        - name: aws_eks_instance_type
+          value: "{{AWS_EKS_INSTANCE_TYPE}}"
+        - name: aws_eks_min_node_count
+          value: "{{AWS_EKS_NODE_COUNT}}"
+        - name: aws_eks_ssh_key
+          value: "{{EKS_PUBLIC_SSH_KEY}}"
+        - name: TF_VAR_ep_repository_user
+          value: "{{EP_NEXUS_USER}}"
+        - name: TF_VAR_ep_repository_password
+          valueFrom:
+            secretKeyRef:
+              name: {{K8S_SECRET}}
+              key: {{EP_NEXUS_PASSWORD_KEY}}
+        - name: TF_VAR_ep_cortex_maven_repo_url
+          value: "{{EP_CORTEX_MAVEN_REPO_URL}}"
+        - name: TF_VAR_ep_commerce_engine_maven_repo_url
+          value: "{{EP_COMMERCE_ENGINE_MAVEN_REPO_URL}}"
+        - name: TF_VAR_ep_accelerators_maven_repo_url
+          value: "{{EP_ACCELERATORS_MAVEN_REPO_URL}}"
+        - name: TF_VAR_jenkins_allowed_cidr
+          value: "{{JENKINS_ALLOWED_CIDR}}"
+        - name: TF_VAR_jenkins_trust_all_certificates
+          value: "true"
+        - name: TF_VAR_nexus_repo_username
+          value: "admin"
+        - name: TF_VAR_nexus_repo_password
+          value: "admin123"
+        - name: TF_VAR_nexus_base_uri
+          value: "http://ep-nexus-service:8081"
+        - name: TF_VAR_nexus_allowed_cidr
+          value: "{{NEXUS_ALLOWED_CIDR}}"
+        - name: TF_VAR_oracle_jdk_download_url
+          value: "{{JDK_DOWNLOAD_URI}}"
+        - name: TF_VAR_jdk_folder_name
+          value: "{{JDK_FOLDER_NAME}}"
+        - name: TF_VAR_maven_download_url
+          value: "https://archive.apache.org/dist/maven/maven-3/3.6.2/binaries/apache-maven-3.6.2-bin.tar.gz"
+        - name: TF_VAR_maven_folder_name
+          value: "apache-maven-3.6.2"
+        - name: TF_VAR_tomcat_version
+          value: "{{TOMCAT_VERSION}}"
+        - name: TF_VAR_default_account_management_release_package_url
+          value: "{{DEFAULT_AM_RELEASE_PACKAGE_URL}}"
+        - name: TF_VAR_git_credential_username
+          value: "git"
+        - name: TF_VAR_git_ssh_host_key
+          value: "{{SSH_HOST_KEY}}"
+        - name: TF_VAR_cloudops_for_kubernetes_repo_url
+          value: "{{EP_KUBERNETES_REPO_URL}}"
+        - name: TF_VAR_cloudops_for_kubernetes_default_branch
+          value: "{{EP_KUBERNETES_BRANCH}}"
+        - name: TF_VAR_ep_commerce_repo_url
+          value: "{{EP_COMMERCE_REPO_URL}}"
+        - name: TF_VAR_ep_commerce_default_branch
+          value: "{{EP_COMMERCE_BRANCH}}"
+        - name: TF_VAR_docker_repo_url
+          value: "{{EP_DOCKER_REPO_URL}}"
+        - name: TF_VAR_docker_default_branch
+          value: "{{EP_DOCKER_BRANCH}}"
+        volumeMounts:
+          - name: private-ssh-key
+            mountPath: "/secrets"
+            readOnly: true
+      dnsConfig:
+        options:
+          - name: single-request-reopen
+          - name: timeout
+            value: "3"
+          - name: attempts
+            value: "3"
+      volumes:
+      - name: private-ssh-key
+        secret:
+          secretName: {{K8S_SECRET}}
+          defaultMode: 256
+          items:
+          - key: {{PRIVATE_SSH_KEY_KEY}}
+            path: git_id_rsa
+      restartPolicy: Never

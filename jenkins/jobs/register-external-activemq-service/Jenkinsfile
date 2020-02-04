@@ -1,0 +1,136 @@
+// this bit is just plain Jenkins Groovy
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+def randomLabel = "jenkins-worker-${UUID.randomUUID().toString()}"
+
+// define the build agent
+def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
+def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+def podYamlFromFile = new File("${env.JENKINS_HOME}/workspace/register-external-activemq-service@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/docker-1gb-0.25core-1container.yaml").text.trim();
+String podYaml = podYamlFromFile.replace('${dockerRegistryAddress}', "${dockerRegistryAddress}").replace('${jenkinsAgentImageTag}', "${jenkinsAgentImageTag}")
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent {
+    kubernetes {
+      label "docker-${randomLabel}"
+      defaultContainer "jnlp"
+      yaml "${podYaml}"
+    }
+  }
+  environment {
+    TF_IN_AUTOMATION = "true"
+    TF_CLI_ARGS = "-no-color"
+    TF_CLI_ARGS_apply = "-input=false"
+    TF_CLI_ARGS_destroy = "-input=false"
+    TF_CLI_ARGS_plan = "-input=false"
+  }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
+    timeout(time: 40, unit: 'MINUTES')
+  }
+  stages {
+    stage('Validate job parameters') {
+      steps {
+        container('docker1') {
+          script {
+            if ( ! ("${params.TF_VAR_service_name}" ==~ "^[a-z0-9]+\$")) {
+              error "TF_VAR_service_name must start with a letter and must be lowercase alphanumeric"
+            }
+            if ( ! params.TF_VAR_jms_url.startsWith("tcp://") ) {
+              error "TF_VAR_jms_url must start with tcp://"
+            }
+            if ( new URI(params.TF_VAR_jms_url).getPort().equals(-1) ) {
+              error "TF_VAR_jms_url must contain a port"
+            }
+            if ( new URI(params.TF_VAR_jms_url).getHost().equals(-1) ) {
+              error "TF_VAR_jms_url must contain a valid hostname"
+            }
+            if ( ! "${params.TF_VAR_kubernetes_namespace}".trim()) {
+              error "TF_VAR_kubernetes_namespace must be set"
+            }
+            if ( ! "${params.cluster_name}".trim()) {
+              error "TF_VAR_oidc_discovery_url must be set"
+            }
+          }
+        }
+      }
+    }
+    stage('Configure Terraform backend') {
+      steps {
+        container('docker1') {
+          script {
+            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+
+            eplib.loginToCloud()
+            eplib.loginToKubernetesCluster("${params.cluster_name}")
+            eplib.loginToTerraform()
+            terraformWorkspaceName = eplib.generateTerraformWorkspaceName("${params.cluster_name}", "${params.TF_VAR_kubernetes_namespace}", "activemq", "${params.TF_VAR_service_name}")
+            eplib.createTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.TF_VAR_kubernetes_namespace}")
+
+            // set Jenkins build description
+            currentBuild.description = eplib.getJenkinsDescription(params.destroy_mode)
+          }
+        }
+      }
+    }
+    stage('Plan Terraform changes') {
+      when { expression { return params.plan_mode } }
+      steps {
+        container('docker1') {
+          dir("cloudops-for-kubernetes/terraform/activemq-secret") {
+            script {
+              // run Terraform
+              terraformOperation = eplib.getTerraformCommand(params.destroy_mode, params.plan_mode)
+              tfPlanOutFile = eplib.getTfPlanOutFile()
+
+              labelledShell label: 'Plan Terraform changes', script: """
+                terraform init -get-plugins=false
+                terraform workspace select ${terraformWorkspaceName}
+
+                terraform ${terraformOperation} -var-file=credentials.tfvars \
+                  -parallelism=50 -out=${tfPlanOutFile}
+              """
+            }
+          }
+        }
+      }
+    }
+    stage('Ask confirmation to continue') {
+      when { expression { return params.plan_mode } }
+      steps {
+        timeout(time: 6, unit: "HOURS") {
+          input message: "Should the Terraform changes be applied?", ok: "Yes"
+        }
+      }
+    }
+    stage('Apply Terraform changes') {
+      steps {
+        container('docker1') {
+          dir("cloudops-for-kubernetes/terraform/activemq-secret") {
+            script {
+              // run Terraform
+              terraformOperation = eplib.getTerraformCommand(params.destroy_mode, false)
+              terraformParams = eplib.getTerraformParams(params.destroy_mode, params.plan_mode)
+
+              labelledShell label: 'Apply Terraform changes', script: """
+                terraform init -get-plugins=false
+                terraform workspace select ${terraformWorkspaceName}
+
+                terraform ${terraformOperation} -auto-approve -parallelism=50 ${terraformParams}
+              """
+            }
+          }
+
+          // go back to root dir
+          script {
+            if (params.destroy_mode) {
+              eplib.deleteTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.TF_VAR_kubernetes_namespace}")
+            }
+          }
+        }
+      }
+    }
+  }
+}

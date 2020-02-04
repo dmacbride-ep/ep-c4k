@@ -1,0 +1,156 @@
+// this bit is just plain Jenkins Groovy
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+def randomLabel = "jenkins-worker-${UUID.randomUUID().toString()}"
+def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
+def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+
+// this is a workaround until this bug is fixed: https://issues.jenkins-ci.org/browse/JENKINS-56943
+def podYamlFromFile = new File("${env.JENKINS_HOME}/workspace/create-additional-AKS-cluster@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/docker-1gb-0.25core-1container.yaml").text.trim();
+String podYaml = podYamlFromFile.replace('${dockerRegistryAddress}', "${dockerRegistryAddress}").replace('${jenkinsAgentImageTag}', "${jenkinsAgentImageTag}")
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent {
+    kubernetes {
+      label "${randomLabel}"
+      defaultContainer "jnlp"
+      yaml "${podYaml}"
+    }
+  }
+
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
+      }
+  stages {
+    stage('Load EP Groovy Library') {
+      steps {
+        container('docker1') {
+          script {
+            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+          }
+        }
+      }
+    }
+    stage('Login to cloud, the Kubernetes cluster, and the Docker Registry') {
+      steps {
+        container('docker1') {
+          script {
+            eplib.loginToCloud()
+            eplib.loginToKubernetesCluster("${kubernetesClusterName}")
+            eplib.loginToDockerRegistry()
+          }
+        }
+      }
+    }
+    stage('Build the bootstrap image') {
+      steps {
+        container('docker1') {
+          labelledShell label: 'Build the bootstrap image', script: """
+            cd cloudops-for-kubernetes
+            img pull ${dockerRegistryAddress}/bootstrap/kubernetes-bootstrap:${params.cloudOpsForKubernetesBranch} ||
+            {
+              echo "Building image instead."
+              img build -t ${dockerRegistryAddress}/bootstrap/kubernetes-bootstrap:${params.cloudOpsForKubernetesBranch} .
+              img push ${dockerRegistryAddress}/bootstrap/kubernetes-bootstrap:${params.cloudOpsForKubernetesBranch}
+            }
+          """
+        }
+      }
+    }
+    stage('Generate a new SSH key-pair for the AKS cluster nodes') {
+      steps {
+        container('docker1') {
+          script {
+            clusterKeyName = "id_rsa_${params.clusterName}"
+            labelledShell label: 'Generate a new SSH key-pair for the AKS cluster nodes', script: """
+              cd cloudops-for-kubernetes
+              rm "${clusterKeyName}" "${clusterKeyName}".pub || true
+              ssh-keygen -f "${clusterKeyName}" -t rsa -N ''
+            """
+          }
+        }
+      }
+    }
+    stage('Create Namespace if it does not exist') {
+      steps {
+        container('docker1') {
+          script {
+            labelledShell label: 'Check Kubectl namespace', script: """
+              (kubectl get namespace "${params.kubernetesNamespace}") || kubectl create namespace "${params.kubernetesNamespace}"
+            """
+          }
+        }
+      }
+    }
+    stage('Upload Jenkins password parameters to a Kubernetes secret') {
+      steps {
+        container('docker1') {
+          script {
+            randomUuid = "${UUID.randomUUID().toString()}"
+
+            labelledShell label: 'Upload Jenkins password parameters to a Kubernetes secret', script: """
+              set +x
+                cd cloudops-for-kubernetes
+                kubectl create secret -n ${params.kubernetesNamespace} generic "bootstrap-cluster-secret-${randomUuid}" \
+                    --from-literal=service-principal-password=${params.azureServicePrincipalPassword} \
+                    --from-literal=AKS-cluster-private-ssh-key="\$(cat ${clusterKeyName})"
+              set -x
+            """
+          }
+        }
+      }
+    }
+    stage('Run the bootstrap container in setup-additional-cluster mode') {
+      steps {
+        container('docker1') {
+          labelledShell label: 'Run the bootstrap container', script: """
+            cd cloudops-for-kubernetes
+            # env vars for running the bootstrap container:
+            export UUID="${randomUuid}"
+
+            export REGISTRY_ADDRESS="${dockerRegistryAddress}"
+            export DOCKER_IMAGE_TAG="${params.cloudOpsForKubernetesBranch}"
+
+            export BOOTSTRAP_MODE="setup-new-cluster"
+
+            export BASE_NAME="${params.baseName}"
+            export CLUSTER_NAME="${params.clusterName}"
+            export DOMAIN_NAME="${params.domainName}"
+            export LOCATION="${params.location}"
+            export AKSNODEVMSIZE="${params.aksNodeVMSize}"
+            export AKSNODECOUNT="${params.aksNodeCount}"
+
+            export AZ_SUBSCRIPTION_ID="${params.azureSubscriptionId}"
+            export AZ_TENANT_ID="${params.azureServicePrincipalTenantId}"
+            export AZ_SP_APP_ID="${params.azureServicePrincipalAppId}"
+
+            export K8S_SECRET="bootstrap-cluster-secret-${randomUuid}"
+            export AKS_PUBLIC_SSH_KEY="\$(cat ${clusterKeyName}.pub)"
+            export AZ_SP_PASSWORD_ID_KEY="service-principal-password"
+
+            mo jenkins/jobs/create-additional-AKS-cluster/bootstrap.yaml.mo-template \
+              > bootstrap.yaml
+
+            kubectl -n ${params.kubernetesNamespace} create -f bootstrap.yaml
+
+            jobPod=\$(kubectl -n ${params.kubernetesNamespace} get pods --selector=job-name=kubernetes-bootstrap-${randomUuid} --output=jsonpath={.items..metadata.name})
+
+            kubectl -n ${params.kubernetesNamespace} wait --timeout 300s --for=condition=Ready pod "\$jobPod" \
+              || true # don't fail if pod failed (still need logs and to delete job)
+
+            kubectl -n ${params.kubernetesNamespace} logs "\$jobPod" -f \
+              || true # don't fail until job is deleted
+
+            bootstrapExitCode=\$(kubectl -n ${params.kubernetesNamespace} get pod "\$jobPod" -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}') \
+              || bootstrapExitCode=1 # don't fail until job is deleted
+
+            kubectl -n ${params.kubernetesNamespace} delete job "kubernetes-bootstrap-${randomUuid}"
+            exit "\$bootstrapExitCode"
+          """
+        }
+      }
+    }
+  }
+}

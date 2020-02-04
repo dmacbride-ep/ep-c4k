@@ -1,0 +1,90 @@
+// this bit is just plain Jenkins Groovy
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+def randomLabel = "jenkins-worker-${UUID.randomUUID().toString()}"
+
+def sharedSteps() {
+  // load EP Groovy Library
+  eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+
+  labelledShell label: 'Install prereqs', script: """
+    apk add curl git
+    curl https://raw.githubusercontent.com/kadwanev/retry/master/retry -o /usr/local/bin/retry && chmod +x /usr/local/bin/retry
+    curl -fSL "https://github.com/genuinetools/img/releases/download/v0.5.6/img-linux-amd64" -o "/usr/local/bin/img" \
+      && echo "f5d686465a7463c296e94634bd9597af58544ead924567c9128a4ee352591bf1  /usr/local/bin/img" | sha256sum -c - \
+      && chmod a+x "/usr/local/bin/img" \
+      && echo "img installed!"
+
+    apk add python3
+    pip3 install --upgrade pip
+    pip3 install awscli --upgrade
+  """
+
+  eplib.loginToDockerRegistry()
+}
+
+// this is a workaround until this bug is fixed: https://issues.jenkins-ci.org/browse/JENKINS-56943
+def podYaml = new File("${env.JENKINS_HOME}/workspace/build-jenkins-agents@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/alpine-1gb-1core-1container.yaml").text.trim();
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent none
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
+      }
+  environment {
+    dockerImageTag = "${params.cloudOpsForKubernetesBranch}".replace('/','-');
+  }
+  stages {
+    stage("Parallel Jenkins agent builds and pushes") {
+      parallel {
+        stage('Build and push docker-agent') {
+          agent { kubernetes { label("jenkins-worker-${UUID.randomUUID().toString()}"); defaultContainer("jnlp"); yaml("${podYaml}") } }
+          steps {
+            container('alpine') {
+              script {
+                sharedSteps()
+
+                labelledShell(label: 'Build docker-agent', script: """
+                  cp cloudops-for-kubernetes/terraform-bundle.hcl.mo-template cloudops-for-kubernetes/jenkins/agents/docker/docker-agent/
+                  cd cloudops-for-kubernetes/jenkins/agents/docker/docker-agent
+                  img build --no-console -t ${dockerRegistryAddress}/jenkins/docker-agent:${dockerImageTag} .
+                """)
+
+                labelledShell(label: 'Push docker-agent', script: """
+                  img push ${dockerRegistryAddress}/jenkins/docker-agent:${dockerImageTag}
+                """)
+              }
+            }
+          }
+        }
+        stage('Build and push maven-agent') {
+          agent { kubernetes { label("jenkins-worker-${UUID.randomUUID().toString()}"); defaultContainer("jnlp"); yaml("${podYaml}") } }
+          steps {
+            container('alpine') {
+              script {
+                sharedSteps()
+
+                labelledShell(label: 'Build maven-agent', script: """
+                  encodedOracleJdkDownloadUrl=\$(cat /jenkins-secrets/oracleJdkDownloadUrl | base64 | tr -d '\\n')
+                  cd cloudops-for-kubernetes/jenkins/agents/docker/maven-agent
+                  img build --no-console \
+                    --build-arg "encodedOracleJdkDownloadUrl=\${encodedOracleJdkDownloadUrl}" \
+                    --build-arg "jdkFolderName=\$(cat /jenkins-secrets/jdkFolderName)" \
+                    --build-arg "mavenDownloadUrl=\$(cat /jenkins-secrets/mavenDownloadUrl)" \
+                    --build-arg "mavenFolderName=\$(cat /jenkins-secrets/mavenFolderName)" \
+                    -t ${dockerRegistryAddress}/jenkins/maven-agent:${dockerImageTag} .
+                """)
+
+                labelledShell(label: 'Push maven-agent', script: """
+                  img push ${dockerRegistryAddress}/jenkins/maven-agent:${dockerImageTag}
+                """)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

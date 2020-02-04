@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: jnlp
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "200m"
+      limits:
+        memory: "512Mi"
+        cpu: "200m"
+  - name: alpine
+    image: alpine
+    imagePullPolicy: "Always"
+    command:
+    - cat
+    tty: true
+    securityContext:
+      privileged: true
+    resources:
+      requests:
+        memory: "1024Mi"
+        cpu: "1"
+      limits:
+        memory: "1024Mi"
+        cpu: "1"
+    volumeMounts:
+    - name: jenkins-secrets-volume
+      mountPath: /jenkins-secrets
+    - name: root-home-dir-volume
+      mountPath: /root
+  dnsConfig:
+    options:
+      - name: single-request-reopen
+      - name: timeout
+        value: "3"
+      - name: attempts
+        value: "3"
+  volumes:
+  - name: jenkins-secrets-volume
+    secret:
+      secretName: jenkins-secrets
+  - name: root-home-dir-volume
+    emptyDir: {}
