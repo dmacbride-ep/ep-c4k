@@ -25,7 +25,7 @@ provider "azurerm" {
 }
 
 provider "kubernetes" {
-  version = "~> 1.7"
+  version = "= 1.10"
 
   host = var.cloud == "azure" ? "${azurerm_kubernetes_cluster.hub[0].kube_config.0.host}" : null
 

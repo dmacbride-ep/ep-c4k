@@ -25,7 +25,7 @@ provider "azurerm" {
 }
 
 provider "kubernetes" {
-  version = "~> 1.7"
+  version = "= 1.10"
 }
 
 provider "helm" {

@@ -9,7 +9,7 @@ providers {
   aws = ["~> 2.17"]
   azurerm = ["= 1.37"]
   helm = ["~> 0.10"]
-  kubernetes = ["~> 1.8"]
+  kubernetes = ["= 1.10"]
   null = ["~> 2.1"]
   template = ["~> 2.1"]
   tls = ["~> 2.0"]
