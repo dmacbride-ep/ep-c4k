@@ -58,6 +58,12 @@ resource "azurerm_kubernetes_cluster" "hub" {
     vnet_subnet_id      = azurerm_subnet.hub[0].id
   }
 
+  addon_profile {
+    kube_dashboard {
+      enabled = true
+    }
+  }
+
   linux_profile {
     admin_username = "azureuser"
     ssh_key {
