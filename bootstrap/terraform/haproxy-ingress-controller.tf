@@ -43,7 +43,7 @@ resource "kubernetes_namespace" "haproxy-namespace" {
 
 resource "kubernetes_secret" "tls-secret" {
   count      = terraform.workspace == "bootstrap" ? 1 : 0
-  depends_on = [kubernetes_namespace.haproxy-namespace]
+  depends_on = [kubernetes_namespace.haproxy-namespace, azurerm_kubernetes_cluster.hub]
 
   type = "kubernetes.io/tls"
   metadata {
@@ -67,7 +67,7 @@ data "template_file" "haproxy-ingress-controller-helm-values" {
 
 resource "helm_release" "haproxy" {
   count      = terraform.workspace == "bootstrap" ? 1 : 0
-  depends_on = [kubernetes_deployment.tiller_deploy, kubernetes_namespace.haproxy-namespace, kubernetes_secret.tls-secret, kubernetes_deployment.metrics_server]
+  depends_on = [kubernetes_deployment.tiller_deploy, kubernetes_namespace.haproxy-namespace, kubernetes_secret.tls-secret, kubernetes_deployment.metrics_server, azurerm_kubernetes_cluster.hub]
 
   name       = local.haproxy_release_name
   namespace  = local.haproxy_release_name

@@ -1,5 +1,5 @@
 resource "kubernetes_deployment" "tiller_deploy" {
-  depends_on = [kubernetes_service.tiller_deploy, kubernetes_service_account.tiller, kubernetes_cluster_role_binding.tiller]
+  depends_on = [kubernetes_service.tiller_deploy, kubernetes_service_account.tiller, kubernetes_cluster_role_binding.tiller, azurerm_kubernetes_cluster.hub]
 
   metadata {
     name      = "tiller-deploy"

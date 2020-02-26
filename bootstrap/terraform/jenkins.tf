@@ -94,7 +94,7 @@ data "helm_repository" "stable" {
 
 resource "helm_release" "jenkins" {
   count      = terraform.workspace == "bootstrap" ? 1 : 0
-  depends_on = [kubernetes_deployment.tiller_deploy, kubernetes_secret.jenkins-secrets, kubernetes_deployment.kube_state_metrics]
+  depends_on = [kubernetes_deployment.tiller_deploy, kubernetes_secret.jenkins-secrets, kubernetes_deployment.kube_state_metrics, azurerm_kubernetes_cluster.hub]
 
   name       = "jenkins"
   repository = data.helm_repository.stable.metadata.0.name

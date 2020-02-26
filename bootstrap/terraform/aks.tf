@@ -7,18 +7,19 @@ data "azurerm_resource_group" "rg" {
 data "azurerm_kubernetes_service_versions" "current" {
   count = "${(var.cloud == "azure") && (terraform.workspace == "bootstrap") ? 1 : 0}"
 
-  location = "${data.azurerm_resource_group.rg[0].location}"
+  location       = "${data.azurerm_resource_group.rg[0].location}"
   version_prefix = "${var.kubernetes_version}"
 }
 
 resource "azurerm_kubernetes_cluster" "hub" {
   count = (var.cloud == "azure") && (terraform.workspace == "bootstrap") ? 1 : 0
   lifecycle {
+    create_before_destroy = true
     ignore_changes = [
       default_node_pool[0].node_count,
       default_node_pool[0].min_count,
       default_node_pool[0].max_count,
-      api_server_authorized_ip_ranges]
+    api_server_authorized_ip_ranges]
   }
 
   name                = var.kubernetes_cluster_name
@@ -61,6 +62,18 @@ resource "azurerm_kubernetes_cluster" "hub" {
   addon_profile {
     kube_dashboard {
       enabled = true
+    }
+    oms_agent {
+      enabled = false
+    }
+    http_application_routing {
+      enabled = false
+    }
+    azure_policy {
+      enabled = false
+    }
+    aci_connector_linux {
+      enabled = false
     }
   }
 

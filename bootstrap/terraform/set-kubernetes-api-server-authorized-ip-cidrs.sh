@@ -37,8 +37,11 @@ az login --service-principal --tenant ${azure_service_principal_tenant_id} \
 info "setting the authorized IP ranges for the Kubernetes API"
 nodeResourceGroup=$(az aks show --resource-group "${resource_group_name}" --name "${kubernetes_cluster_name}" --query nodeResourceGroup -o tsv)
 [ $? -eq 0 ] || error "failed to get the node resource group in set-kubernetes-api-server-authorized-ip-cidrs.sh"
-loadBalancerIP=$(az network public-ip list --resource-group "${nodeResourceGroup}" --query '[].ipAddress' -o tsv)
+
+loadBalancerIP=( $(az network public-ip list --resource-group "${nodeResourceGroup}" --query '[].ipAddress' -o tsv) )
 [ $? -eq 0 ] || error "failed to get the public IP of the load balancer in set-kubernetes-api-server-authorized-ip-cidrs.sh"
+[ "${#loadBalancerIP[@]}" -eq 1 ] || error "expecting only one public IP assigned to the cluster, found: ${loadBalancerIP[*]}"
+
 az aks update --resource-group "${resource_group_name}" --name "${kubernetes_cluster_name}" \
-  --api-server-authorized-ip-ranges "${loadBalancerIP}/32,${azure_k8s_api_server_authorized_ip_ranges}"
+  --api-server-authorized-ip-ranges "${loadBalancerIP[0]}/32,${azure_k8s_api_server_authorized_ip_ranges}"
 [ $? -eq 0 ] || error "failed to set the authorized IP ranges in set-kubernetes-api-server-authorized-ip-cidrs.sh"
