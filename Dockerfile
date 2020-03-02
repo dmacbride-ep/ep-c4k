@@ -54,7 +54,7 @@ ARG AWS_IAM_AUTHENTICATOR_URL="https://amazon-eks.s3-us-west-2.amazonaws.com/1.1
 # update installed packages
 RUN apt-get update && \
     apt-get upgrade -y && \
-    apt-get install -y curl dnsutils && \
+    apt-get install -y curl dnsutils unzip && \
     apt-get clean all
 
 # install retry
@@ -68,6 +68,11 @@ COPY --from=terraform-downloader /terraform /usr/local/bin/
 # install eksctl
 RUN curl --location "https://github.com/weaveworks/eksctl/releases/download/latest_release/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp && \
     mv /tmp/eksctl /usr/local/bin
+
+# install the AWS CLI
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+RUN unzip awscliv2.zip
+RUN ./aws/install
 
 # install the Azure CLI
 # this follows Microsoft's docs from https://docs.microsoft.com/en-us/cli/azure/install-azure-cli-apt

@@ -40,6 +40,10 @@ error() {
   exit 1
 }
 
+COMMA_IF_NOT_FIRST() {
+    [[ "${moCurrent#*.}" != "0" ]] && echo ","
+}
+
 prepareSSHKey() {
   info "preparing the ssh key"
 
@@ -182,6 +186,30 @@ destroyTerraformBackend() {
   info "destroying the Terraform backend complete"
 }
 
+createEksctlConfig() {
+  info "determining which availability zones are available"
+
+  if [ "${TF_VAR_aws_region}" == "us-east-1" ]; then
+    availabilityZones=( us-east-1a us-east-1b )
+  else
+    availabilityZonesString=$(aws ec2 describe-availability-zones --region ${TF_VAR_aws_region}) \
+      || error "Failed to determine availability zones availible in this account"
+    parsedAvailabilityZonesString=$(echo ${availabilityZonesString} | jq '(.AvailabilityZones[0].ZoneName), (.AvailabilityZones[1].ZoneName), (.AvailabilityZones[2].ZoneName)' --raw-output) \
+      || error "failed to parse list of availability zones"
+    availabilityZones=( ${parsedAvailabilityZonesString} )
+  fi
+
+  [ ! -z "$availabilityZones" ] || error "set of available availability zones was empty"
+
+  # sourcing mo so array params can be detemplatized
+  . mo
+
+  info "detemplatizing eksctl config template"
+  mo --fail-not-set /root/bootstrap/eksctl.yaml.mo-template > /root/bootstrap/eksctl.yaml \
+    || error "could not detemplatize the eksctl.yaml file"
+}
+
+
 createEKSCluster() {
   info "creating the EKS cluster (if needed)"
 
@@ -194,15 +222,12 @@ createEKSCluster() {
     info "EKS cluster already exists"
   else
     info "EKS cluster doesn't already exist"
-    mo --fail-not-set /root/bootstrap/eksctl.yaml.mo-template > /root/bootstrap/eksctl.yaml \
-      || error "could not detemplatize the eksctl.yaml file"
+
+    createEksctlConfig
+
     warning "creating the EKS cluster will take about 10-30 minutes with no output displayed"
 
-    if [ "${TF_VAR_aws_region}" == "us-east-1" ]; then
-      export aws_region_us_east_1=true
-    else
-      export aws_region_us_east_1=false
-    fi
+    info "creating EKS cluster"
     eksctl create cluster \
       --config-file=/root/bootstrap/eksctl.yaml \
       --timeout=120m \

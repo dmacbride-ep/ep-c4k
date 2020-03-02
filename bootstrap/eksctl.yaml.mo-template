@@ -6,12 +6,12 @@ metadata:
   region: "{{TF_VAR_aws_region}}"
   version: "{{TF_VAR_kubernetes_version}}"
 
-{{#aws_region_us_east_1}}
-availabilityZones: ["us-east-1a","us-east-1b"]
-{{/aws_region_us_east_1}}
+availabilityZones: [{{#availabilityZones}}{{COMMA_IF_NOT_FIRST}}"{{.}}"{{/availabilityZones}}]
 
 nodeGroups:
-- name: "ng-1"
+{{#availabilityZones}}
+- name: "ng-{{.}}"
+  availabilityZones: ["{{.}}"]
   instanceType: "{{aws_eks_instance_type}}"
   minSize: {{aws_eks_min_node_count}}
   maxSize: 100
@@ -39,3 +39,4 @@ nodeGroups:
     evictionHard:
       memory.available:  "200Mi"
       nodefs.available: "10%"
+{{/availabilityZones}}

@@ -128,7 +128,7 @@ services:
       #    "m5a.xlarge"
       aws_eks_instance_type: "m5a.xlarge"
 
-      # Enter the minimum nodes of worker node instances in the EKS cluster.
+      # Enter the minimum nodes of worker node instances per node group in the EKS cluster (there are 3 node groups by default).
       #
       # Example "aws_eks_min_node_count":
       #    "1"
