@@ -22,22 +22,18 @@ pipeline {
   options {
     buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
     timeout(time: 3, unit: 'HOURS')
-      }
+  }
+  environment {
+    MAVEN_OPTS = '-Xmx8192m'
+    MAVEN_COMMON_ARGS = '-U -B -V -e -DskipAllTests -Daether.artifactDescriptor.threads=16 -Dmaven.artifact.threads=16 -Dmaven.wagon.http.retryHandler.count=10'
+  }
   stages {
-    stage('Load EP Groovy Library') {
-      steps {
-        container('maven') {
-          script {
-            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
-          }
-        }
-      }
-    }
-    stage('Checkout code') {
+    stage('Checkout Commerce code') {
       steps {
         container('maven') {
           dir ('ep-commerce') {
             script {
+              eplib = load "../cloudops-for-kubernetes/lib/eplib.groovy"
               eplib.gitShallowClone("${params.epCommerceRepoURL}", "${params.epCommerceBranch}", "${params.epCommerceCredentialId}")
             }
           }
@@ -61,7 +57,7 @@ pipeline {
         }
       }
     }
-    stage('Setting the ep-commerce version') {
+    stage('Set Commerce version') {
       steps {
         container('maven') {
           sh """
@@ -78,34 +74,44 @@ pipeline {
         }
       }
     }
-    stage('Build and push deployment package') {
+    stage('Build Commerce') {
       steps {
         container('maven') {
           sh """
             cd ep-commerce
-            export MAVEN_OPTS="-Xmx8192m"
-            export MAVEN_COMMON_ARGS="-U -B -V -e -DskipAllTests -Daether.artifactDescriptor.threads=16 -Dmaven.artifact.threads=16 -Dmaven.wagon.http.retryHandler.count=10"
 
-            mvn install \${MAVEN_COMMON_ARGS} -f bill-of-materials/pom.xml
-            mvn deploy \${MAVEN_COMMON_ARGS} -f pom.xml -N
-            mvn install \${MAVEN_COMMON_ARGS} -f commerce-data/pom.xml -T 3
-            mvn install \${MAVEN_COMMON_ARGS} -f commerce-engine/pom.xml -T 3
-            mvn install \${MAVEN_COMMON_ARGS} -f health-monitoring/pom.xml -T 3
-            mvn install \${MAVEN_COMMON_ARGS} -f commerce-manager/pom.xml
-            mvn install \${MAVEN_COMMON_ARGS} -f cortex-resources/pom.xml -T 3
-            mvn install \${MAVEN_COMMON_ARGS} -f extensions/pom.xml
+            mvn deploy ${MAVEN_COMMON_ARGS} -f pom.xml -N
+            mvn install ${MAVEN_COMMON_ARGS} -f pom.xml
+          """
+        }
+      }
+    }
+    stage('Push Deployment Package') {
+      steps {
+        container('maven') {
+          sh """
+            cd ep-commerce
 
-            mvn deploy \${MAVEN_COMMON_ARGS} -f extensions/packager/ext-deployment-package/pom.xml
+            mvn deploy ${MAVEN_COMMON_ARGS} -f extensions/packager/ext-deployment-package/pom.xml
+          """
+        }
+      }
+    }
+    stage('Push test dependencies') {
+      steps {
+        container('maven') {
+          sh """
+            cd ep-commerce
 
-            # build specific EP-Commerce projects required by the Cortex system tests
-            mvn deploy \${MAVEN_COMMON_ARGS} -f commerce-engine/pom.xml -N
-            mvn deploy \${MAVEN_COMMON_ARGS} -f commerce-engine/jms/pom.xml -N
-            mvn deploy \${MAVEN_COMMON_ARGS} -f commerce-engine/jms/ep-jms-test-support/pom.xml
-            mvn deploy \${MAVEN_COMMON_ARGS} -f commerce-engine/ep-query-analyzer/pom.xml	
-            mvn deploy \${MAVEN_COMMON_ARGS} -f extensions/pom.xml -N
-            mvn deploy \${MAVEN_COMMON_ARGS} -f extensions/cortex/pom.xml -N
-            mvn deploy \${MAVEN_COMMON_ARGS} -f extensions/cortex/system-tests/pom.xml -N
-            mvn deploy \${MAVEN_COMMON_ARGS} -f extensions/cortex/system-tests/definitions/pom.xml
+            # push specific EP-Commerce projects required by the Cortex system tests
+            mvn deploy ${MAVEN_COMMON_ARGS} -f commerce-engine/pom.xml -N
+            mvn deploy ${MAVEN_COMMON_ARGS} -f commerce-engine/jms/pom.xml -N
+            mvn deploy ${MAVEN_COMMON_ARGS} -f commerce-engine/jms/ep-jms-test-support/pom.xml
+            mvn deploy ${MAVEN_COMMON_ARGS} -f commerce-engine/ep-query-analyzer/pom.xml
+            mvn deploy ${MAVEN_COMMON_ARGS} -f extensions/pom.xml -N
+            mvn deploy ${MAVEN_COMMON_ARGS} -f extensions/cortex/pom.xml -N
+            mvn deploy ${MAVEN_COMMON_ARGS} -f extensions/cortex/system-tests/pom.xml -N
+            mvn deploy ${MAVEN_COMMON_ARGS} -f extensions/cortex/system-tests/definitions/pom.xml
           """
         }
       }

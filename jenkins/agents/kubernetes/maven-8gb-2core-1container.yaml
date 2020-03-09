@@ -7,9 +7,11 @@ spec:
       requests:
         memory: "512Mi"
         cpu: "200m"
+        ephemeral-storage: "10Mi"
       limits:
         memory: "512Mi"
         cpu: "200m"
+        ephemeral-storage: "10Mi"
   - name: maven
     image: ${dockerRegistryAddress}/jenkins/maven-agent:${jenkinsAgentImageTag}
     imagePullPolicy: "Always"
@@ -20,9 +22,11 @@ spec:
       requests:
         memory: "8704Mi"
         cpu: "2"
+        ephemeral-storage: "13Gi"
       limits:
         memory: "8704Mi"
         cpu: "2"
+        ephemeral-storage: "13Gi"
     volumeMounts:
     - name: jenkins-secrets-volume
       mountPath: /jenkins-secrets
