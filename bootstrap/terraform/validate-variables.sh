@@ -107,6 +107,7 @@ validateEnvVars() {
   gitSSHRepoURLRegEx='^[[:alnum:]]+@(([a-zA-Z](-?[a-zA-Z0-9])*)\.)*[a-zA-Z](-?[a-zA-Z0-9])+\.[a-zA-Z]{2,}:(\/)?([^\/[:space:]]+(\/)?)+$'
   azureVMSizeRegEx='^[a-zA-Z0-9]+[a-zA-Z0-9_]*[a-zA-Z0-9]+$'
   allowedCIDRListRegex='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}(,[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2})*$'
+  CIDRRangeRegex='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$'
   azureK8sAuthorizedIpRangeListRegex='^\[ *"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}"(,\ ?"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}")*\ *]$'
 
   ## Env var validation requirements if the TF_VAR_bootstrap_mode is setup-new-cluster, clean, or show
@@ -142,6 +143,7 @@ validateEnvVars() {
     isGitSSHRepoURL=( "TF_VAR_cloudops_for_kubernetes_repo_url" "TF_VAR_ep_commerce_repo_url" "TF_VAR_docker_repo_url" )
     isVersionNumber=( "TF_VAR_tomcat_version" )
     isAllowedCIDRList=( "TF_VAR_jenkins_allowed_cidr" "TF_VAR_nexus_allowed_cidr" )
+    isCIDRRange=( "TF_VAR_aws_kubernetes_cluster_vpc_cidr" )
     isBoolean=( "TF_VAR_jenkins_trust_all_certificates" )
     if [ "${TF_VAR_cloud}" == "aws" ]; then
       notEmpty+=( "TF_VAR_aws_access_key_id" "TF_VAR_aws_access_key_id" "TF_VAR_aws_secret_access_key" \
@@ -178,6 +180,7 @@ validateEnvVars() {
   validate_var_array "$versionNumberRegEx" "must be a valid version number" "${isVersionNumber[@]}"
   validate_var_array "$azureVMSizeRegEx" "must be a valid Azure virtual machine size" "${isAzureVMSize[@]}"
   validate_var_array "$allowedCIDRListRegex" "must be a valid IP address CIDR list" "${isAllowedCIDRList[@]}"
+  validate_var_array "$CIDRRangeRegex" "must be a valid IP address CIDR range" "${isCIDRRange[@]}"
   validate_var_array "$azureK8sAuthorizedIpRangeListRegex" "must be a valid list of Azure kubernetes allowed IP ranges" "${isAzureK8sAuthorizedIpRangeList[@]}"
   validate_json_or_empty_var_array "must be json or empty" "${isJsonOrEmpty[@]}"
 

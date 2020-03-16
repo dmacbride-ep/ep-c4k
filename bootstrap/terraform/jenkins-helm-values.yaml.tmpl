@@ -227,6 +227,7 @@ master:
     - metrics:4.0.2.6
     - momentjs:1.1.1
     - monitoring:1.81.0
+    - nested-view:1.17
     - oauth-credentials:0.4
     - pipeline-build-step:2.11
     - pipeline-graph-analysis:1.10
@@ -279,6 +280,8 @@ master:
     - "method java.net.URL getPath"
     - "method java.net.URI getPort"
     - "method java.net.URI getHost"
+    - "method org.jenkinsci.plugins.workflow.support.steps.build.RunWrapper getRawBuild"
+    - "method hudson.model.Run getLog int"
     - "new java.lang.String byte[]"
     - "new java.io.File java.lang.String"
     - "new java.io.File java.io.File java.lang.String"
@@ -311,7 +314,7 @@ master:
 
      // add the git credentials
      import com.cloudbees.jenkins.plugins.sshcredentials.impl.*
-     def gitCredentialId = "gitCredentialId";
+     def gitCredentialId = "${git_credential_id}";
      def gitCredentialDescription = "Git SSH Credential";
      def gitCredentialUsername = new File("/secret/jenkins-secrets/gitCredentialUsername").text.trim();
      def gitCredentialPrivateKey = new File("/secret/jenkins-secrets/gitCredentialPrivateKey").text.trim();
@@ -336,7 +339,7 @@ master:
      new File("/home/jenkins/.ssh/known_hosts") << new File("/secret/jenkins-secrets/gitSSHHostKey").text.trim();
      "chmod 600 /home/jenkins/.ssh/known_hosts".execute();
 
-     // create the bootstrap job
+     // create or update the bootstrap job
      import hudson.plugins.git.*;
      import org.jenkinsci.plugins.workflow.*;
      import org.jenkinsci.plugins.workflow.job.*;
@@ -346,7 +349,12 @@ master:
      import jenkins.model.*;
      import hudson.model.*;
      def jenkinsInstance = Jenkins.getInstanceOrNull();
-     def job = jenkinsInstance.createProject(FreeStyleProject, "bootstrap");
+
+     def job = jenkinsInstance.getItem("bootstrap")
+     if (! job) {
+       job = jenkinsInstance.createProject(FreeStyleProject, "bootstrap")
+     }
+
      job.setAssignedLabel(null);
      def cloudOpsForKubernetesRepoURL = new File("/secret/jenkins-secrets/cloudOpsForKubernetesRepoURL").text.trim();
      def cloudOpsForKubernetesDefaultBranch = new File("/secret/jenkins-secrets/cloudOpsForKubernetesDefaultBranch").text.trim();
@@ -361,9 +369,17 @@ master:
        [] // no SCM extensions
        );
      job.setScm(gitSCM);
-     def buildStep = new ExecuteDslScripts()
-     buildStep.setTargets("jenkins/jobs/bootstrap/bootstrap.groovy");
-     job.getBuildersList().add(buildStep);
+
+     job.getBuildersList().clear()
+
+     def bootstrapStep = new ExecuteDslScripts()
+     bootstrapStep.setTargets("jenkins/jobs/bootstrap/bootstrap.groovy")
+     job.getBuildersList().add(bootstrapStep)
+
+     def pipelineStep = new ExecuteDslScripts()
+     pipelineStep.setTargets("jenkins/jobs/bootstrap/c4k_pipelines.groovy")
+     job.getBuildersList().add(pipelineStep)
+
      job.save();
 
      //creates the Jenkins API token
@@ -469,7 +485,7 @@ master:
   # that the chart is installed.  Setting `overwriteConfig` to `true` will overwrite
   # the jenkins config with the contents of the configMap every time the pod starts.
   # This will also overwrite all init scripts
-  overwriteConfig: false
+  overwriteConfig: true
 
   # By default, the Jobs Map is only used to set the initial jobs the first time
   # that the chart is installed.  Setting `overwriteJobs` to `true` will overwrite
@@ -492,8 +508,7 @@ master:
     # configures the hostname e.g. jenkins.example.com
     hostName: jenkins.${subdomain_name}.${dns_zone_name}
     tls:
-     - secretName: jenkins.cluster.local
-       hosts:
+     - hosts:
          - jenkins.${subdomain_name}.${dns_zone_name}
 
   # Openshift route
@@ -595,9 +610,15 @@ persistence:
    - name: jenkins-secrets-volume
      secret:
        secretName: jenkins-secrets
+   - name: jenkins-pipeline-secrets-volume
+     secret:
+       secretName: jenkins-pipeline-secrets
   mounts:
    - mountPath: /secret/jenkins-secrets
      name: jenkins-secrets-volume
+     readOnly: true
+   - mountPath: /secret/jenkins-pipeline-secrets
+     name: jenkins-pipeline-secrets-volume
      readOnly: true
 
 networkPolicy:

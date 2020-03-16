@@ -1,3 +1,8 @@
+
+locals {
+  gitCredentialId = "gitCredentialId"
+}
+
 resource "kubernetes_secret" "jenkins-secrets" {
   count      = terraform.workspace == "bootstrap" ? 1 : 0
   depends_on = [azurerm_kubernetes_cluster.hub]
@@ -12,29 +17,30 @@ resource "kubernetes_secret" "jenkins-secrets" {
     "kubernetesClusterName" = "${var.kubernetes_cluster_name}"
 
     # AWS
-    "awsRegion"          = "${var.cloud == "aws" ? "${var.aws_region}" : null}"
-    "awsAccessKeyId"     = "${var.cloud == "aws" ? "${var.aws_access_key_id}" : null}"
-    "awsSecretAccessKey" = "${var.cloud == "aws" ? "${var.aws_secret_access_key}" : null}"
+    "awsRegion"          = "${var.cloud == "aws" ? "${var.aws_region}" : ""}"
+    "awsAccessKeyId"     = "${var.cloud == "aws" ? "${var.aws_access_key_id}" : ""}"
+    "awsSecretAccessKey" = "${var.cloud == "aws" ? "${var.aws_secret_access_key}" : ""}"
     # AWS + Terraform Backend
-    "awsBackendS3Bucket"      = "${var.cloud == "aws" ? "${var.aws_backend_s3_bucket}" : null}"
-    "awsBackendS3BucketKey"   = "${var.cloud == "aws" ? "${var.aws_backend_s3_bucket_key}" : null}"
-    "awsBackendDynamoDBTable" = "${var.cloud == "aws" ? "${var.aws_backend_dynamodb_table}" : null}"
+    "awsBackendS3Bucket"      = "${var.cloud == "aws" ? "${var.aws_backend_s3_bucket}" : ""}"
+    "awsBackendS3BucketKey"   = "${var.cloud == "aws" ? "${var.aws_backend_s3_bucket_key}" : ""}"
+    "awsBackendDynamoDBTable" = "${var.cloud == "aws" ? "${var.aws_backend_dynamodb_table}" : ""}"
 
     # Azure
-    "azureSubscriptionId"           = "${var.cloud == "azure" ? "${var.azure_subscription_id}" : null}"
-    "azureServicePrincipalTenantId" = "${var.cloud == "azure" ? "${var.azure_service_principal_tenant_id}" : null}"
-    "azureServicePrincipalAppId"    = "${var.cloud == "azure" ? "${var.azure_service_principal_app_id}" : null}"
-    "azureServicePrincipalPassword" = "${var.cloud == "azure" ? "${var.azure_service_principal_password}" : null}"
-    "resourceGroupName"             = "${var.cloud == "azure" ? "${var.azure_resource_group_name}" : null}"
+    "azureSubscriptionId"           = "${var.cloud == "azure" ? "${var.azure_subscription_id}" : ""}"
+    "azureServicePrincipalTenantId" = "${var.cloud == "azure" ? "${var.azure_service_principal_tenant_id}" : ""}"
+    "azureServicePrincipalAppId"    = "${var.cloud == "azure" ? "${var.azure_service_principal_app_id}" : ""}"
+    "azureServicePrincipalPassword" = "${var.cloud == "azure" ? "${var.azure_service_principal_password}" : ""}"
+    "resourceGroupName"             = "${var.cloud == "azure" ? "${var.azure_resource_group_name}" : ""}"
     # Azure + Terraform Backend
-    "azureBackendStorageAccountName" = "${var.cloud == "azure" ? "${var.azure_backend_storage_account_name}" : null}"
-    "azureBackendContainerName"      = "${var.cloud == "azure" ? "${var.azure_backend_container_name}" : null}"
-    "azureBackendBlobName"           = "${var.cloud == "azure" ? "${var.azure_backend_blob_name}" : null}"
+    "azureBackendStorageAccountName" = "${var.cloud == "azure" ? "${var.azure_backend_storage_account_name}" : ""}"
+    "azureBackendContainerName"      = "${var.cloud == "azure" ? "${var.azure_backend_container_name}" : ""}"
+    "azureBackendBlobName"           = "${var.cloud == "azure" ? "${var.azure_backend_blob_name}" : ""}"
 
     # DNS
     "domainName" = "${var.domain}"
 
     # Git
+    "gitCredentialId"                    = "${local.gitCredentialId}"
     "gitCredentialUsername"              = "${var.git_credential_username}"
     "gitCredentialPrivateKey"            = "${file(var.git_credential_private_key_path)}"
     "gitSSHHostKey"                      = "${var.git_ssh_host_key}"
@@ -78,12 +84,38 @@ resource "kubernetes_secret" "jenkins-secrets" {
   type = "Opaque"
 }
 
+resource "kubernetes_secret" "jenkins-pipeline-secrets" {
+  count      = terraform.workspace == "bootstrap" ? 1 : 0
+  depends_on = [azurerm_kubernetes_cluster.hub]
+
+  metadata {
+    name = "jenkins-pipeline-secrets"
+  }
+
+  data = {
+    # C4K master
+    "awsAccessKeyIdMaster"                = "${var.awsAccessKeyIdMaster}"
+    "awsSecretAccessKeyMaster"            = "${var.awsSecretAccessKeyMaster}"
+    "azureServicePrincipalAppIdMaster"    = "${var.azureServicePrincipalAppIdMaster}"
+    "azureServicePrincipalPasswordMaster" = "${var.azureServicePrincipalPasswordMaster}"
+
+    # C4K 2.0
+    "awsAccessKeyId20"                = "${var.awsAccessKeyId20}"
+    "awsSecretAccessKey20"            = "${var.awsSecretAccessKey20}"
+    "azureServicePrincipalAppId20"    = "${var.azureServicePrincipalAppId20}"
+    "azureServicePrincipalPassword20" = "${var.azureServicePrincipalPassword20}"
+  }
+
+  type = "Opaque"
+}
+
 data "template_file" "jenkins-helm-values" {
   template = "${file("jenkins-helm-values.yaml.tmpl")}"
   vars = {
     jenkins_allowed_cidr = "${var.jenkins_allowed_cidr}",
     subdomain_name       = "${var.kubernetes_cluster_name}",
     dns_zone_name        = "${var.domain}"
+    git_credential_id    = "${local.gitCredentialId}"
   }
 }
 

@@ -4,6 +4,9 @@ def randomUUID = "${UUID.randomUUID().toString()}"
 def randomLabel = "jenkins-worker-${randomUUID}"
 def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
 def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+def cloudOpsForKubernetesRepoURL = new File(secretsDirectory, "cloudOpsForKubernetesRepoURL").text.trim();
+def gitCredentialId = new File(secretsDirectory, "gitCredentialId").text.trim()
+def epCommerceRepoURL = new File(secretsDirectory, "epCommerceRepoURL").text.trim();
 
 def sharedSteps() {
   // load EP Groovy Library
@@ -34,11 +37,12 @@ pipeline {
     timeout(time: 5, unit: 'HOURS')
   }
   stages {
-    stage('Load EP Groovy Library') {
+    stage('Load EP Lib and Build Lib') {
       steps {
         container('maven') {
           script {
             eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+            buildlib = load "cloudops-for-kubernetes/lib/buildlib.groovy"
           }
         }
       }
@@ -48,7 +52,7 @@ pipeline {
         container('maven') {
           dir ('ep-commerce') {
             script {
-              eplib.gitShallowClone("${params.epCommerceRepoURL}", "${params.epCommerceBranch}", "${params.epCommerceCredentialId}")
+              eplib.gitShallowClone("${epCommerceRepoURL}", "${params.epCommerceBranch}", gitCredentialId)
             }
           }
         }
@@ -59,7 +63,7 @@ pipeline {
         container('maven') {
           dir ('cloudops-for-kubernetes') {
             script {
-              eplib.gitShallowClone("${params.cloudOpsForKubernetesRepoURL}", "${params.cloudOpsForKubernetesBranch}", "${params.epCommerceCredentialId}")
+              eplib.gitShallowClone("${cloudOpsForKubernetesRepoURL}", "${params.cloudOpsForKubernetesBranch}", gitCredentialId)
             }
           }
         }
@@ -100,6 +104,25 @@ pipeline {
         }
       }
     }
+    stage('Build deployment package without running tests') {
+      steps {
+        container('maven') {
+          sh """
+            cd ep-commerce
+            export MAVEN_OPTS="-Xmx8192m"
+            export MAVEN_COMMON_ARGS="-U -B -V -e -DskipAllTests -Daether.artifactDescriptor.threads=16 -Dmaven.artifact.threads=16 -Dmaven.wagon.http.retryHandler.count=10"
+            mvn install \${MAVEN_COMMON_ARGS} -f bill-of-materials/pom.xml
+            mvn install \${MAVEN_COMMON_ARGS} -f pom.xml -N
+            mvn install \${MAVEN_COMMON_ARGS} -f commerce-data/pom.xml -T 3
+            mvn install \${MAVEN_COMMON_ARGS} -f commerce-engine/pom.xml -T 3
+            mvn install \${MAVEN_COMMON_ARGS} -f health-monitoring/pom.xml -T 3
+            mvn install \${MAVEN_COMMON_ARGS} -f commerce-manager/pom.xml
+            mvn install \${MAVEN_COMMON_ARGS} -f cortex-resources/pom.xml -T 3
+            mvn install \${MAVEN_COMMON_ARGS} -f extensions/pom.xml
+          """
+        }
+      }
+    }
     stage('Run tests') {
       steps {
         script {
@@ -108,11 +131,14 @@ pipeline {
               container('maven') {
                 sh """
                   chmod +x ./cloudops-for-kubernetes/jenkins/jobs/run-select-commerce-tests/RunSelectedTests.sh
-                  ./cloudops-for-kubernetes/jenkins/jobs/run-select-commerce-tests/RunSelectedTests.sh ''
+                  ./cloudops-for-kubernetes/jenkins/jobs/run-select-commerce-tests/RunSelectedTests.sh ${params.SELECTED_TEST_STRING}
                 """
               }
             }
           }
+          catch(Exception e) {
+            currentBuild.result = 'FAILURE'
+         }
           finally {
             stage('Publish JUnit test result reports') {
               junit(allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml, **/target/failsafe-reports/*.xml')

@@ -21,6 +21,10 @@ pipeline {
   }
   environment {
     TF_IN_AUTOMATION = "true"
+    TF_CLI_ARGS = "-no-color"
+    TF_CLI_ARGS_apply = "-input=false"
+    TF_CLI_ARGS_destroy = "-input=false"
+    TF_CLI_ARGS_plan = "-input=false"
   }
   options {
     buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
@@ -44,15 +48,16 @@ pipeline {
     stage('Preparation Stage') {
       steps {
         container('docker1') {
-          script {
-            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
-            eplib.loginToCloud()
-            eplib.loginToKubernetesCluster("${params.clusterName}")
-            eplib.loginToTerraform()
+          dir("cloudops-for-kubernetes/terraform/mysql-container") {
+            script {
+              eplib = load "${WORKSPACE}/cloudops-for-kubernetes/lib/eplib.groovy"
+              eplib.loginToCloud()
+              eplib.loginToKubernetesCluster("${params.clusterName}")
+              eplib.loginToTerraform()
 
-            terraformWorkspaceName = eplib.generateTerraformWorkspaceName("${params.clusterName}", "${params.kubernetesNamespace}", "mysql-container", "${params.serverName}")
-            eplib.createTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.kubernetesNamespace}")
-
+              terraformWorkspaceName = eplib.generateTerraformWorkspaceName("${params.clusterName}", "${params.kubernetesNamespace}", "mysql-container", "${params.serverName}")
+              eplib.createTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.kubernetesNamespace}")
+            }
           }
         }
       }
@@ -60,24 +65,25 @@ pipeline {
     stage('Create/delete MySQL container') {
       steps {
         container('docker1') {
-          script {
-            String terraformOperation = null
-            if(params.deleteContainer) {
-              terraformOperation = "destroy"
-            } else {
-              terraformOperation = "apply"
+          dir("cloudops-for-kubernetes/terraform/mysql-container") {
+            script {
+              String terraformOperation = null
+              if(params.deleteContainer) {
+                terraformOperation = "destroy"
+              } else {
+                terraformOperation = "apply"
+              }
+              labelledShell label: 'Run Terraform', script: """#!/bin/bash
+                terraform init -get-plugins=false
+                terraform workspace select ${terraformWorkspaceName}
+                export TF_VAR_kubernetes_namespace="${params.kubernetesNamespace}"
+                export TF_VAR_database_name="${params.serverName}"
+                export TF_VAR_registry_address="${dockerRegistryAddress}"
+                export TF_VAR_docker_image_namespace="/ep"
+                export TF_VAR_docker_image_tag="${params.imageTag}"
+                terraform ${terraformOperation} -parallelism=50 -auto-approve
+              """
             }
-            labelledShell label: 'Run Terraform', script: """#!/bin/bash
-              cd "${WORKSPACE}/cloudops-for-kubernetes/terraform/mysql-container"
-              terraform init -get-plugins=false
-              terraform workspace select ${terraformWorkspaceName}
-              export TF_VAR_kubernetes_namespace="${params.kubernetesNamespace}"
-              export TF_VAR_database_name="${params.serverName}"
-              export TF_VAR_registry_address="${dockerRegistryAddress}"
-              export TF_VAR_docker_image_namespace="/ep"
-              export TF_VAR_docker_image_tag="${params.imageTag}"
-              terraform ${terraformOperation} -var-file=credentials.tfvars -parallelism=50 -auto-approve -no-color -input=false
-            """
           }
         }
       }
@@ -85,8 +91,10 @@ pipeline {
     stage('Clean-up Stage') {
       steps {
         container('docker1') {
-          script {
-            eplib.deleteTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.kubernetesNamespace}")
+          dir("cloudops-for-kubernetes/terraform/mysql-container") {
+            script {
+              eplib.deleteTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.kubernetesNamespace}")
+            }
           }
         }
       }

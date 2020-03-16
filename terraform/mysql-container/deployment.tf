@@ -111,4 +111,7 @@ resource "kubernetes_deployment" "ep_mysql_deployment" {
     }
     progress_deadline_seconds = 900
   }
+  timeouts {
+    create = "20m"
+  }
 }

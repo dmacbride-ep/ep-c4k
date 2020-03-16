@@ -1,22 +1,22 @@
 locals {
   ingresses = (var.include_ingresses == "false" ? {} : {
     "cm" = {
-      "allowed_cidr" = "${var.cm_allowed_cidr}"
+      "allowed_cidr" = var.cm_allowed_cidr
       "path"         = "/cm/"
       "service"      = "ep-cm-service"
     }
     "integration" = {
-      "allowed_cidr" = "${var.integration_allowed_cidr}"
+      "allowed_cidr" = var.integration_allowed_cidr
       "path"         = "/integration"
       "service"      = "ep-integration-service"
     }
     "cortex" = {
-      "allowed_cidr" = "${var.cortex_allowed_cidr}"
+      "allowed_cidr" = var.cortex_allowed_cidr
       "path"         = "/cortex"
       "service"      = "ep-cortex-service"
     }
     "studio" = {
-      "allowed_cidr" = "${var.studio_allowed_cidr}"
+      "allowed_cidr" = var.studio_allowed_cidr
       "path"         = "/studio"
       "service"      = "ep-cortex-service"
     }

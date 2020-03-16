@@ -60,17 +60,19 @@ pipeline {
     stage('Configure Terraform backend') {
       steps {
         container('docker1') {
-          script {
-            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+          dir("cloudops-for-kubernetes/terraform/activemq-secret") {
+            script {
+              eplib = load "${WORKSPACE}/cloudops-for-kubernetes/lib/eplib.groovy"
 
-            eplib.loginToCloud()
-            eplib.loginToKubernetesCluster("${params.cluster_name}")
-            eplib.loginToTerraform()
-            terraformWorkspaceName = eplib.generateTerraformWorkspaceName("${params.cluster_name}", "${params.TF_VAR_kubernetes_namespace}", "activemq", "${params.TF_VAR_service_name}")
-            eplib.createTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.TF_VAR_kubernetes_namespace}")
+              eplib.loginToCloud()
+              eplib.loginToKubernetesCluster("${params.cluster_name}")
+              eplib.loginToTerraform()
+              terraformWorkspaceName = eplib.generateTerraformWorkspaceName("${params.cluster_name}", "${params.TF_VAR_kubernetes_namespace}", "activemq", "${params.TF_VAR_service_name}")
+              eplib.createTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.TF_VAR_kubernetes_namespace}")
 
-            // set Jenkins build description
-            currentBuild.description = eplib.getJenkinsDescription(params.destroy_mode)
+              // set Jenkins build description
+              currentBuild.description = eplib.getJenkinsDescription(params.destroy_mode)
+            }
           }
         }
       }
@@ -89,8 +91,7 @@ pipeline {
                 terraform init -get-plugins=false
                 terraform workspace select ${terraformWorkspaceName}
 
-                terraform ${terraformOperation} -var-file=credentials.tfvars \
-                  -parallelism=50 -out=${tfPlanOutFile}
+                terraform ${terraformOperation} -parallelism=50 -out=${tfPlanOutFile}
               """
             }
           }
@@ -120,13 +121,10 @@ pipeline {
 
                 terraform ${terraformOperation} -auto-approve -parallelism=50 ${terraformParams}
               """
-            }
-          }
 
-          // go back to root dir
-          script {
-            if (params.destroy_mode) {
-              eplib.deleteTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.TF_VAR_kubernetes_namespace}")
+              if (params.destroy_mode) {
+                eplib.deleteTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.TF_VAR_kubernetes_namespace}")
+              }
             }
           }
         }

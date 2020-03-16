@@ -6,6 +6,11 @@ metadata:
   region: "{{TF_VAR_aws_region}}"
   version: "{{TF_VAR_kubernetes_version}}"
 
+vpc:
+  cidr: {{TF_VAR_aws_kubernetes_cluster_vpc_cidr}}
+  nat:
+    gateway: HighlyAvailable
+
 availabilityZones: [{{#availabilityZones}}{{COMMA_IF_NOT_FIRST}}"{{.}}"{{/availabilityZones}}]
 
 nodeGroups:

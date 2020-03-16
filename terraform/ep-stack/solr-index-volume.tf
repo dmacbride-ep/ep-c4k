@@ -7,9 +7,9 @@ resource "kubernetes_persistent_volume_claim" "solr_index_volume" {
     access_modes = ["ReadWriteOnce"]
     resources {
       requests = {
-        storage = local.ep_stack_resourcing_proflies["searchmaster"][var.ep_resourcing_profile]["pvc-size"]
+        storage = local.commerce_profiles["searchmaster"][var.ep_resourcing_profile]["pvc-size"]
       }
     }
-    storage_class_name = local.ep_stack_resourcing_proflies["searchmaster"][var.ep_resourcing_profile]["storage-class"]
+    storage_class_name = local.commerce_profiles["searchmaster"][var.ep_resourcing_profile]["storage-class"]
   }
 }

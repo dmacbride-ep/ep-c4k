@@ -59,6 +59,26 @@ variable "aws_backend_dynamodb_table" {
   default = null
 }
 
+variable "aws_enable_cloudwatch_logging" {
+  type    = bool
+  default = false
+}
+
+variable "aws_kubernetes_cluster_vpc_cidr" {
+  type    = string
+  default = null
+}
+
+variable "aws_kubernetes_cluster_vpc_id" {
+  type    = string
+  default = null
+}
+
+variable "aws_remote_peering_vpc_id" {
+  type    = string
+  default = ""
+}
+
 variable "azure_subscription_id" {
   type    = string
   default = null

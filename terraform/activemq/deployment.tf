@@ -47,11 +47,11 @@ resource "kubernetes_deployment" "ep_activemq_deployment" {
           resources {
             limits {
               cpu    = "1"
-              memory = "768Mi"
+              memory = "1280Mi"
             }
             requests {
               cpu    = "1"
-              memory = "768Mi"
+              memory = "1280Mi"
             }
           }
           volume_mount {
@@ -102,5 +102,8 @@ resource "kubernetes_deployment" "ep_activemq_deployment" {
       }
     }
     progress_deadline_seconds = 900
+  }
+  timeouts {
+    create = "20m"
   }
 }

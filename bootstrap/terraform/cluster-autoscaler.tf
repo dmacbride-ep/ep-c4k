@@ -79,7 +79,12 @@ resource "kubernetes_cluster_role" "cluster-autoscaler" {
   }
   rule {
     api_groups = ["apps"]
-    resources  = ["statefulsets"]
+    resources  = ["statefulsets", "replicasets", "daemonsets"]
+    verbs      = ["watch", "list", "get"]
+  }
+  rule {
+    api_groups = ["batch"]
+    resources  = ["jobs"]
     verbs      = ["watch", "list", "get"]
   }
   rule {
@@ -209,6 +214,7 @@ resource "kubernetes_deployment" "cluster-autoscaler" {
             "--cloud-provider=aws",
             "--skip-nodes-with-local-storage=false",
             "--expander=least-waste",
+            "--expendable-pods-priority-cutoff=-10",
             "--node-group-auto-discovery=asg:tag=k8s.io/cluster-autoscaler/enabled,k8s.io/cluster-autoscaler/${var.kubernetes_cluster_name}"
           ]
           env {
@@ -232,11 +238,11 @@ resource "kubernetes_deployment" "cluster-autoscaler" {
             name = "single-request-reopen"
           }
           option {
-            name = "timeout"
+            name  = "timeout"
             value = 3
           }
           option {
-            name = "attempts"
+            name  = "attempts"
             value = 3
           }
         }

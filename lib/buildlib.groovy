@@ -1,5 +1,7 @@
 import java.time.LocalDateTime
 import groovy.lang.Binding
+import hudson.model.Result
+import org.jenkinsci.plugins.workflow.support.steps.build.RunWrapper
 
 eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
 
@@ -21,15 +23,33 @@ def downloadDeploymentPackageFromJenkins(String epCommerceRepoURL,String epComme
   """
 }
 
-def buildAndPushImage(String epAppInBuild) {
-  sharedSteps()
-  cloneDockerCode()
-  downloadDeploymentPackage()
-  sh """
-    sed -i -e "s/`grep 'epApps' docker/EpImageBuilder/config/ep-image-builder.conf | awk -F'"' '{print \$2}'`/${epAppInBuild}/g" docker/EpImageBuilder/config/ep-image-builder.conf
-    cd docker/EpImageBuilder/
-    ./EpImageBuilder.sh --configFile config/ep-image-builder.conf --tomcatversion ${params.tomcatVersion} --deploymentPackage /root/deploymentpackage.zip --dockerRegistry ${dockerRegistryAddress} --namespace ep --dockerImageTag "${dockerImageTag}" --useImg
-  """
+def validateDockerTag(String tag, String parameterName) {
+  if(! tag) throw new Exception("${parameterName} parameter must be set")
+  if(tag.contains("/")) throw new Exception("${parameterName} parameter must not have slashes")
+}
+
+@NonCPS
+String getLogFromRunWrapper(RunWrapper runWrapper, int logLines) {
+  runWrapper.getRawBuild().getLog(logLines).join('\n    ')
+}
+
+def buildLocalJob(String jobName, def parameters) {
+  // do not fail current job immediatly after triggered job fails
+  RunWrapper buildResult = build(
+    job: jobName,
+    parameters: parameters,
+    propagate: false,
+    wait: true
+  )
+
+  // output logs
+  echo buildlib.getLogFromRunWrapper(buildResult, 10000)
+
+  // now fail if needed
+  buildJobResult = buildResult.getCurrentResult()
+  if (buildJobResult != Result.SUCCESS.toString()) {
+    error "failed building Docker image: ${buildJobResult}"
+  }
 }
 
 // the line below is required because of a quirk in how Jenkins + Groovy handles dynamically loaded code

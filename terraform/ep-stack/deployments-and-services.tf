@@ -1,5 +1,5 @@
 locals {
-  ep_stack_resourcing_proflies = {
+  commerce_profiles = {
     "cm" = {
       "prod-small" = {
         "cpu-cores"  = "3"
@@ -108,6 +108,7 @@ locals {
       "search-secret"                        = "ep-searchslave-secret"
       "probe-command"                        = ["/bin/bash", "-c", "curl -s -f localhost:8080/cm/?servicehandler=status | head -n 1 | grep OK"]
       "liveness-probe-initial-delay-seconds" = "960"
+      "volumes"                              = []
     }
     "integration" = {
       "image-name"                           = "integration"
@@ -115,6 +116,7 @@ locals {
       "search-secret"                        = "ep-searchslave-secret"
       "probe-command"                        = ["/bin/bash", "-c", "curl -s -f localhost:8080/integration/status | head -n 1 | grep OK"]
       "liveness-probe-initial-delay-seconds" = "180"
+      "volumes"                              = []
     }
     "searchmaster" = {
       "image-name"                           = "search"
@@ -122,6 +124,7 @@ locals {
       "search-secret"                        = "ep-searchmaster-secret"
       "probe-command"                        = ["/bin/bash", "-c", "curl -s -f localhost:8082/search/status | head -n 1 | grep OK"]
       "liveness-probe-initial-delay-seconds" = "180"
+      "volumes"                              = [{ "pvc" : "solr-index-volume", "path" : "/ep/solrHome-master/data" }]
     }
     "searchslave" = {
       "image-name"                           = "search"
@@ -129,6 +132,7 @@ locals {
       "search-secret"                        = "ep-searchslave-secret"
       "probe-command"                        = ["/bin/bash", "-c", "curl -s -f localhost:8082/search/status | head -n 1 | grep OK"]
       "liveness-probe-initial-delay-seconds" = "540"
+      "volumes"                              = []
     }
     "cortex" = {
       "image-name"                           = "cortex"
@@ -136,6 +140,7 @@ locals {
       "search-secret"                        = "ep-searchslave-secret"
       "probe-command"                        = ["/bin/bash", "-c", "curl -s -f localhost:8080/cortex/healthcheck"]
       "liveness-probe-initial-delay-seconds" = "960"
+      "volumes"                              = []
     }
     "batch" = {
       "image-name"                           = "batch"
@@ -143,6 +148,7 @@ locals {
       "search-secret"                        = "ep-searchslave-secret"
       "probe-command"                        = ["/bin/bash", "-c", "curl -s -f localhost:8080/batch/status | head -n 1 | grep OK"]
       "liveness-probe-initial-delay-seconds" = "960"
+      "volumes"                              = []
     }
   }
 }
@@ -211,12 +217,12 @@ resource "kubernetes_deployment" "ep_deployment" {
           }
           resources {
             limits {
-              cpu    = local.ep_stack_resourcing_proflies[each.key][var.ep_resourcing_profile]["cpu-cores"]
-              memory = local.ep_stack_resourcing_proflies[each.key][var.ep_resourcing_profile]["memory"]
+              cpu    = local.commerce_profiles[each.key][var.ep_resourcing_profile]["cpu-cores"]
+              memory = local.commerce_profiles[each.key][var.ep_resourcing_profile]["memory"]
             }
             requests {
-              cpu    = local.ep_stack_resourcing_proflies[each.key][var.ep_resourcing_profile]["cpu-cores"]
-              memory = local.ep_stack_resourcing_proflies[each.key][var.ep_resourcing_profile]["memory"]
+              cpu    = local.commerce_profiles[each.key][var.ep_resourcing_profile]["cpu-cores"]
+              memory = local.commerce_profiles[each.key][var.ep_resourcing_profile]["memory"]
             }
           }
           liveness_probe {
@@ -237,19 +243,35 @@ resource "kubernetes_deployment" "ep_deployment" {
             period_seconds        = 10
             failure_threshold     = 3
           }
+          dynamic "volume_mount" {
+            for_each = each.value["volumes"]
+            content {
+              name       = volume_mount.value["pvc"]
+              mount_path = volume_mount.value["path"]
+            }
+          }
           image_pull_policy = "Always"
           tty               = true
+        }
+        dynamic "volume" {
+          for_each = each.value["volumes"]
+          content {
+            name = volume.value["pvc"]
+            persistent_volume_claim {
+              claim_name = volume.value["pvc"]
+            }
+          }
         }
         dns_config {
           option {
             name = "single-request-reopen"
           }
           option {
-            name = "timeout"
+            name  = "timeout"
             value = 3
           }
           option {
-            name = "attempts"
+            name  = "attempts"
             value = 3
           }
         }

@@ -133,7 +133,7 @@ resource "kubernetes_ingress" "info_page_ingress" {
     name      = "info-page-ingress"
     namespace = var.kubernetes_namespace
     annotations = {
-      "ingress.kubernetes.io/whitelist-source-range" = "${var.info_page_allowed_cidr}"
+      "ingress.kubernetes.io/whitelist-source-range" = var.info_page_allowed_cidr
       "kubernetes.io/ingress.class"                  = "haproxy"
       "ingress.kubernetes.io/load-balance"           = "least_conn"
       "ingress.kubernetes.io/secure-backends"        = "false"

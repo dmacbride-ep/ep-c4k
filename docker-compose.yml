@@ -1,7 +1,12 @@
 version: '2.1'
 services:
   kubernetes-bootstrap:
-    build: .
+    build:
+      context: .
+      args:
+        # (Optional) A Github.com personal access token to use when authenticating API requests to Github.com.
+        #            Github.com may rate limit unauthenticated requests.
+        github_personal_access_token: ""
     container_name: kubernetes-bootstrap
     environment:
 
@@ -111,6 +116,25 @@ services:
       # Example of "TF_VAR_aws_backend_dynamodb_table"
       #    "epexample"
       TF_VAR_aws_backend_dynamodb_table: ""
+
+      # Whether to install a Fluentd agent to forward all Pod logs to CloudWatch.
+      #
+      # WARNING:
+      #  This can increase your AWS charges significantly
+      TF_VAR_aws_enable_cloudwatch_logging: "false"
+
+      # Enter the cidr range for the kubernetes cluster's VPC. Only CIDR blocks ending in /16 are supported.
+      #
+      # Example of "TF_VAR_aws_cluster_vpc_cidr"
+      TF_VAR_aws_kubernetes_cluster_vpc_cidr: "10.100.0.0/16"
+
+      # Enter the VPC id for a VPC you would like to create a peering connection to. A peering connection and route
+      # table entries will be created between the kubernetes cluster and the remote peering VPC. Security group rules
+      # need to be added manually to allow traffic between the two VPCs
+      #
+      # Example of "TF_VAR_aws_remote_peering_vpc_id"
+      #    "vpc-xxxxxxxxxxxxxxxxx"
+      TF_VAR_aws_remote_peering_vpc_id: ""
 
       # Enter the size of the instances in the EKS cluster.
       #
@@ -422,6 +446,7 @@ services:
       #    "ssh.dev.azure.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAA...TISQBtdcyPaEno7fFQMDD26/s0lfKob4Kw8H"
       TF_VAR_git_ssh_host_key: ""
 
+
       # Git repository of the cloudops-for-kubernetes code
       #
       # Example TF_VAR_cloudops_for_kubernetes_repo_url:
@@ -434,7 +459,7 @@ services:
       #    "master"
       TF_VAR_cloudops_for_kubernetes_default_branch: "master"
 
-      # The Git address of the ep-commerce code
+      # The Git address of the ep-commerce repository
       #
       # Example TF_VAR_ep_commerce_repo_url:
       #    "git@ssh.dev.azure.com:v3/MyName/myproject/ep-commerce"
@@ -446,7 +471,7 @@ services:
       #    "master"
       TF_VAR_ep_commerce_default_branch: "master"
 
-      # The Git address of the docker code
+      # The Git address of the CloudOps Docker repository
       #
       # Example TF_VAR_docker_repo_url:
       #    "git@ssh.dev.azure.com:v3/MyName/myproject/docker"
@@ -458,7 +483,7 @@ services:
       #    "master"
       TF_VAR_docker_default_branch: "master"
 
-    volumes:
+    # volumes:
       # The path to the SSH private key that will be used for Git repository authentication:
       # * The first half of the path points to the location of the file on the machine where the container is being run.
       # * The second half is left unchanged.

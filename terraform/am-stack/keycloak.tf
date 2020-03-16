@@ -6,8 +6,8 @@ locals {
 
   haproxy_release_name          = "haproxy-ingress-global"
   cluster_public_ip             = jsondecode(data.http.cluster_public_ip.body).ip
-  allowed_cidrs_plus_cluster_ip = join(",", concat(split(",", var.allowed_cidrs), ["${local.cluster_public_ip}/32"]))
-
+  azure_cluster_subnet          = "10.1.0.0/16"
+  allowed_cidrs_plus_cluster_ip = var.cloud == "azure" ? join(",", [local.azure_cluster_subnet], concat(split(",", var.allowed_cidrs), ["${local.cluster_public_ip}/32"])) : join(",", concat(split(",", var.allowed_cidrs), ["${local.cluster_public_ip}/32"]))
   keycloak_db_user     = var.include_keycloak ? "${lookup(data.kubernetes_secret.keycloak_db[0].data, "API_DB_USER")}" : ""
   keycloak_db_password = var.include_keycloak ? "${lookup(data.kubernetes_secret.keycloak_db[0].data, "API_DB_PASSWORD")}" : ""
   keycloak_db_name     = var.include_keycloak ? "${lookup(data.kubernetes_secret.keycloak_db[0].data, "API_DB_SCHEMA")}" : ""
@@ -20,7 +20,7 @@ data "template_file" "keycloak-helm-values" {
   template = "${file("keycloak-helm-values.yaml.tmpl")}"
 
   vars = {
-    allowedCidrPlusClusterIp = local.allowed_cidrs_plus_cluster_ip,
+    allowedCidrPlusClusterIp = local.allowed_cidrs_plus_cluster_ip
     keycloakDomainName       = local.keycloak_domain_name
     adminUsername            = local.keycloak_admin_username
     keycloakMysqlSecret      = "ep-am-mysql-${var.keycloak_database_name}-secret"

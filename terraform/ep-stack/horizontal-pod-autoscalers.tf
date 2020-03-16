@@ -14,9 +14,9 @@ resource "kubernetes_horizontal_pod_autoscaler" "ep_searchslave_hpa" {
       name        = "ep-searchslave-deployment"
       api_version = "apps/v1"
     }
-    min_replicas                      = local.ep_stack_resourcing_proflies["searchslave"][var.ep_resourcing_profile]["min-replicas"]
-    max_replicas                      = local.ep_stack_resourcing_proflies["searchslave"][var.ep_resourcing_profile]["max-replicas"]
-    target_cpu_utilization_percentage = local.ep_stack_resourcing_proflies["searchslave"][var.ep_resourcing_profile]["target-cpu-utilization"]
+    min_replicas                      = local.commerce_profiles["searchslave"][var.ep_resourcing_profile]["min-replicas"]
+    max_replicas                      = local.commerce_profiles["searchslave"][var.ep_resourcing_profile]["max-replicas"]
+    target_cpu_utilization_percentage = local.commerce_profiles["searchslave"][var.ep_resourcing_profile]["target-cpu-utilization"]
   }
 }
 
@@ -36,8 +36,8 @@ resource "kubernetes_horizontal_pod_autoscaler" "ep_cortex_hpa" {
       name        = "ep-cortex-deployment"
       api_version = "apps/v1"
     }
-    min_replicas                      = local.ep_stack_resourcing_proflies["cortex"][var.ep_resourcing_profile]["min-replicas"]
-    max_replicas                      = local.ep_stack_resourcing_proflies["cortex"][var.ep_resourcing_profile]["max-replicas"]
-    target_cpu_utilization_percentage = local.ep_stack_resourcing_proflies["cortex"][var.ep_resourcing_profile]["target-cpu-utilization"]
+    min_replicas                      = local.commerce_profiles["cortex"][var.ep_resourcing_profile]["min-replicas"]
+    max_replicas                      = local.commerce_profiles["cortex"][var.ep_resourcing_profile]["max-replicas"]
+    target_cpu_utilization_percentage = local.commerce_profiles["cortex"][var.ep_resourcing_profile]["target-cpu-utilization"]
   }
 }
