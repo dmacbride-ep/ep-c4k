@@ -12,11 +12,17 @@ RUN curl --retry-connrefused --retry-delay 5 https://raw.githubusercontent.com/k
 #####
 FROM alpine:latest AS terraform-downloader
 
+ARG github_personal_access_token
+
 RUN apk --no-cache add aria2 curl jq unzip
 
-RUN curl --silent https://api.github.com/repos/hashicorp/terraform/releases/latest | jq -r '.tag_name' | tr -d 'v' > /terraform-version
+COPY bootstrap/get-terraform-version.sh /get-terraform-version.sh
+RUN /get-terraform-version.sh > /terraform-version
 
-RUN aria2c --max-connection-per-server=4 --min-split-size=1M --summary-interval=5 --download-result=full --out=/tf.zip https://releases.hashicorp.com/terraform/$(cat /terraform-version)/terraform_$(cat /terraform-version)_linux_amd64.zip
+RUN aria2c --max-connection-per-server=4 --min-split-size=1M --summary-interval=5 \
+           --download-result=full \
+           --out=/tf.zip \
+           https://releases.hashicorp.com/terraform/$(cat /terraform-version)/terraform_$(cat /terraform-version)_linux_amd64.zip
 
 RUN unzip /tf.zip
 

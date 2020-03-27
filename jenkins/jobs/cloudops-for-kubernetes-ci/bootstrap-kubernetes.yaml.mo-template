@@ -132,6 +132,8 @@ spec:
           value: "{{EP_DOCKER_REPO_URL}}"
         - name: TF_VAR_docker_default_branch
           value: "{{EP_DOCKER_BRANCH}}"
+        - name: TF_VAR_aws_kubernetes_cluster_vpc_cidr
+          value: "10.100.0.0/16"
         volumeMounts:
           - name: private-ssh-key
             mountPath: "/secrets"

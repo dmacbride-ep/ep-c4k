@@ -5,23 +5,23 @@ import groovy.lang.Binding
 secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
 cloud = new File(secretsDirectory, "cloud").exists() ? new File(secretsDirectory, "cloud").text.trim() : "azure";
 kubernetesClusterName = new File(secretsDirectory, "kubernetesClusterName").text.trim();
-if(cloud.equals("azure")) {
-  azureSubscriptionId = new File(secretsDirectory, "azureSubscriptionId").text.trim();
-  azureServicePrincipalTenantId = new File(secretsDirectory, "azureServicePrincipalTenantId").text.trim();
-  azureServicePrincipalAppId = new File(secretsDirectory, "azureServicePrincipalAppId").text.trim();
-  azureServicePrincipalPassword = new File(secretsDirectory, "azureServicePrincipalPassword").text.trim();
-  resourceGroupName = new File(secretsDirectory, "resourceGroupName").text.trim();
-  azureBackendStorageAccountName = new File(secretsDirectory, "azureBackendStorageAccountName").text.trim();
-  azureBackendContainerName = new File(secretsDirectory, "azureBackendContainerName").text.trim();
-  azureBackendBlobName = new File(secretsDirectory, "azureBackendBlobName").text.trim();
-} else if(cloud.equals("aws")) {
-  awsRegion = new File(secretsDirectory, "awsRegion").text.trim();
-  awsAccessKeyId = new File(secretsDirectory, "awsAccessKeyId").text.trim();
-  awsSecretAccessKey = new File(secretsDirectory, "awsSecretAccessKey").text.trim();
-  awsBackendS3Bucket = new File(secretsDirectory, "awsBackendS3Bucket").text.trim();
-  awsBackendS3BucketKey = new File(secretsDirectory, "awsBackendS3BucketKey").text.trim();
-  awsBackendDynamoDBTable = new File(secretsDirectory, "awsBackendDynamoDBTable").text.trim();
-}
+
+azureSubscriptionId = new File(secretsDirectory, "azureSubscriptionId").text.trim();
+azureServicePrincipalTenantId = new File(secretsDirectory, "azureServicePrincipalTenantId").text.trim();
+azureServicePrincipalAppId = new File(secretsDirectory, "azureServicePrincipalAppId").text.trim();
+azureServicePrincipalPassword = new File(secretsDirectory, "azureServicePrincipalPassword").text.trim();
+resourceGroupName = new File(secretsDirectory, "resourceGroupName").text.trim();
+azureBackendStorageAccountName = new File(secretsDirectory, "azureBackendStorageAccountName").text.trim();
+azureBackendContainerName = new File(secretsDirectory, "azureBackendContainerName").text.trim();
+azureBackendBlobName = new File(secretsDirectory, "azureBackendBlobName").text.trim();
+
+awsRegion = new File(secretsDirectory, "awsRegion").text.trim();
+awsAccessKeyId = new File(secretsDirectory, "awsAccessKeyId").text.trim();
+awsSecretAccessKey = new File(secretsDirectory, "awsSecretAccessKey").text.trim();
+awsBackendS3Bucket = new File(secretsDirectory, "awsBackendS3Bucket").text.trim();
+awsBackendS3BucketKey = new File(secretsDirectory, "awsBackendS3BucketKey").text.trim();
+awsBackendDynamoDBTable = new File(secretsDirectory, "awsBackendDynamoDBTable").text.trim();
+
 dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
 nexusRepoUsername = new File(secretsDirectory, "nexusRepoUsername").text.trim();
 nexusRepoPassword = new File(secretsDirectory, "nexusRepoPassword").text.trim();
@@ -46,12 +46,12 @@ def gitShallowClone(String gitUrl, String gitRef, String gitCredentialId) {
 // functions that we use across the Jenkinsfiles
 def loginToDockerRegistry() {
   if(cloud.equals("azure")) {
-    labelledShell label: 'Login to the Docker Registry', script: """
+    labelledShell label: 'Login to the Docker Registry', script: """set +x
       cat /jenkins-secrets/dockerRegistryPassword | img login --username \$(cat /jenkins-secrets/dockerRegistryUsername) --password-stdin \$(cat /jenkins-secrets/dockerRegistryAddress)
     """
   } else if(cloud.equals("aws")) {
     loginToAWS()
-    labelledShell label: 'Login to the Docker Registry', script: """
+    labelledShell label: 'Login to the Docker Registry', script: """set +x
       eval \$(aws ecr get-login --no-include-email | sed 's/docker login/img login/')
     """
   }
@@ -173,9 +173,87 @@ def loginToBootstrappedAWS() {
 }
 
 def loginToTerraform() {
+  labelledShell label: 'Populate credentials.tf file', script: """
+    cat > "./credentials.tf" <<ENDOFFILE
+variable "cloud" {
+  type    = string
+  default = "${cloud}"
+}
+
+variable "aws_access_key_id" {
+  type    = string
+  default = "${awsAccessKeyId}"
+}
+
+variable "aws_secret_access_key" {
+  type    = string
+  default = "${awsSecretAccessKey}"
+}
+
+variable "aws_region" {
+  type    = string
+  default = "${awsRegion}"
+}
+
+variable "aws_backend_s3_bucket" {
+  type    = string
+  default = "${awsBackendS3Bucket}"
+}
+
+variable "aws_backend_s3_bucket_key" {
+  type    = string
+  default = "${awsBackendS3BucketKey}"
+}
+
+variable "aws_backend_dynamodb_table" {
+  type    = string
+  default = "${awsBackendDynamoDBTable}"
+}
+
+variable "azure_subscription_id" {
+  type    = string
+  default = "${azureSubscriptionId}"
+}
+
+variable "azure_service_principal_tenant_id" {
+  type    = string
+  default = "${azureServicePrincipalTenantId}"
+}
+
+variable "azure_service_principal_app_id" {
+  type    = string
+  default = "${azureServicePrincipalAppId}"
+}
+
+variable "azure_service_principal_password" {
+  type    = string
+  default = "${azureServicePrincipalPassword}"
+}
+
+variable "azure_resource_group_name" {
+  type    = string
+  default = "${resourceGroupName}"
+}
+
+variable "azure_backend_storage_account_name" {
+  type    = string
+  default = "${azureBackendStorageAccountName}"
+}
+
+variable "azure_backend_container_name" {
+  type    = string
+  default = "${azureBackendContainerName}"
+}
+
+variable "azure_backend_blob_name" {
+  type    = string
+  default = "${azureBackendBlobName}"
+}
+ENDOFFILE
+      """
   if(cloud.equals("aws")) {
     labelledShell label: 'Populate backend.tf file', script: """
-    cat > "${WORKSPACE}/cloudops-for-kubernetes/terraform/backend.tf" <<ENDOFFILE
+    cat > "./backend.tf" <<ENDOFFILE
 terraform {
   backend "s3" {
     bucket         = "${awsBackendS3Bucket}"
@@ -188,20 +266,9 @@ terraform {
 }
 ENDOFFILE
       """
-    labelledShell label: 'Populate credentials.tfvars file', script: """
-    cat > "${WORKSPACE}/cloudops-for-kubernetes/terraform/credentials.tfvars" <<ENDOFFILE
-cloud                      = "aws"
-aws_access_key_id          = "${awsAccessKeyId}"
-aws_secret_access_key      = "${awsSecretAccessKey}"
-aws_region                 = "${awsRegion}"
-aws_backend_s3_bucket      = "${awsBackendS3Bucket}"
-aws_backend_s3_bucket_key  = "${awsBackendS3BucketKey}"
-aws_backend_dynamodb_table = "${awsBackendDynamoDBTable}"
-ENDOFFILE
-      """
   } else if(cloud.equals("azure")) {
     labelledShell label: 'Populate backend.tf file', script: """
-      cat > "${WORKSPACE}/cloudops-for-kubernetes/terraform/backend.tf" <<ENDOFFILE
+      cat > "./backend.tf" <<ENDOFFILE
 terraform {
   backend "azurerm" {
     subscription_id      = "${azureSubscriptionId}"
@@ -216,32 +283,11 @@ terraform {
 }
 ENDOFFILE
       """
-    labelledShell label: 'Populate credentials.tfvars file', script: """
-      cat > "${WORKSPACE}/cloudops-for-kubernetes/terraform/credentials.tfvars" <<ENDOFFILE
-cloud = "azure"
-
-azure_subscription_id             = "${azureSubscriptionId}"
-azure_service_principal_tenant_id = "${azureServicePrincipalTenantId}"
-azure_service_principal_app_id    = "${azureServicePrincipalAppId}"
-azure_service_principal_password  = "${azureServicePrincipalPassword}"
-
-azure_resource_group_name = "${resourceGroupName}"
-
-azure_backend_storage_account_name = "${azureBackendStorageAccountName}"
-azure_backend_container_name       = "${azureBackendContainerName}"
-azure_backend_blob_name            = "${azureBackendBlobName}"
-ENDOFFILE
-            """
-    azureServicePrincipalTenantId = new File(secretsDirectory, "azureServicePrincipalTenantId").text.trim();
-    azureServicePrincipalAppId = new File(secretsDirectory, "azureServicePrincipalAppId").text.trim();
-    azureServicePrincipalPassword = new File(secretsDirectory, "azureServicePrincipalPassword").text.trim();
-    resourceGroupName = new File(secretsDirectory, "resourceGroupName").text.trim();
   }
 }
 
 List getTerraformWorkspaceNames() {
   List terraformWorkspaceNames = labelledShell(label: 'Get Terraform workspace names', returnStdout: true, script: """
-    cd cloudops-for-kubernetes/terraform
     terraform workspace list | tr -d ' *' | tr '\n' ' '
     """).trim().split(' ');
   return terraformWorkspaceNames
@@ -267,13 +313,11 @@ String generateTerraformWorkspaceName(String clusterName, String kubernetesNames
 // 2. if the Kubernetes Namespace doesn't exist, that it is created
 def createTerraformWorkspaceAndKubernetesNamespace(String terraformWorkspaceName, String kubernetesNamespace) {
   labelledShell(label: 'Initialize Terraform', script: """
-    cd cloudops-for-kubernetes/terraform
     terraform init -reconfigure -get-plugins=false
   """)
   List terraformWorkspaceNameList = getTerraformWorkspaceNames()
   if(terraformWorkspaceNameList.indexOf(terraformWorkspaceName) == -1) {
     labelledShell(label: 'Creating Terraform Workspace', script: """
-      cd cloudops-for-kubernetes/terraform
       terraform workspace new "${terraformWorkspaceName}"
     """)
   }
@@ -291,22 +335,18 @@ def createTerraformWorkspaceAndKubernetesNamespace(String terraformWorkspaceName
 // for the parameters passed,
 def deleteTerraformWorkspaceAndKubernetesNamespace(String terraformWorkspaceName, String kubernetesNamespace) {
   labelledShell(label: 'Initialize Terraform', script: """
-    cd cloudops-for-kubernetes/terraform
     terraform init -reconfigure -get-plugins=false
   """)
   List terraformWorkspaceNameList = getTerraformWorkspaceNames()
   if(terraformWorkspaceNameList.indexOf(terraformWorkspaceName) >= 0) {
     labelledShell(label: 'Selecting Terraform Workspace', script: """#!/bin/bash
-      cd cloudops-for-kubernetes/terraform
       terraform workspace select "${terraformWorkspaceName}"
     """)
     String terraformStateLength = labelledShell(label: 'Get Terraform state length', returnStdout: true, script: """
-      cd cloudops-for-kubernetes/terraform
       terraform show -json | jq '.values.root_module.resources | length'
       """).trim();
     if(terraformStateLength.equals("0")) {
       labelledShell(label: 'Deleting Terraform Workspace', script: """#!/bin/bash
-        cd cloudops-for-kubernetes/terraform
         terraform workspace select default
         terraform workspace delete "${terraformWorkspaceName}"
       """)
@@ -360,7 +400,7 @@ String getTerraformCommand(Boolean isDestroyMode, Boolean isPlanMode) {
 // Get the parameters to pass to the terraform command
 String getTerraformParams(Boolean isDestroyMode, Boolean isPlanMode) {
   if(isDestroyMode || ! isPlanMode) {
-    return "-var-file=credentials.tfvars"
+    return ""
   } else {
     return TF_PLAN_OUT_FILE
   }

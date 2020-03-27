@@ -78,9 +78,6 @@ pipeline {
               if ( ! "${params.TF_VAR_oidc_client_secret}".trim()) {
                 error "TF_VAR_oidc_client_secret must not be empty if TF_VAR_include_keycloak is unset"
               }
-              if ( ! "${params.TF_VAR_oidc_token_scope}".trim()) {
-                error "TF_VAR_oidc_token_scope must not be empty if TF_VAR_include_keycloak is unset"
-              }
               if ( ! "${params.TF_VAR_oidc_group_key}".trim()) {
                 error "TF_VAR_oidc_group_key must not be empty if TF_VAR_include_keycloak is unset"
               }
@@ -103,17 +100,19 @@ pipeline {
     stage('Configure Terraform backend') {
       steps {
         container('docker1') {
-          script {
-            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+          dir("cloudops-for-kubernetes/terraform/am-stack") {
+            script {
+              eplib = load "${WORKSPACE}/cloudops-for-kubernetes/lib/eplib.groovy"
 
-            eplib.loginToCloud()
-            eplib.loginToKubernetesCluster("${params.TF_VAR_kubernetes_cluster_name}")
-            eplib.loginToTerraform()
-            terraformWorkspaceName = eplib.generateTerraformWorkspaceName("${params.TF_VAR_kubernetes_cluster_name}", "${params.TF_VAR_kubernetes_namespace}", "am-stack")
-            eplib.createTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.TF_VAR_kubernetes_namespace}")
+              eplib.loginToCloud()
+              eplib.loginToKubernetesCluster("${params.TF_VAR_kubernetes_cluster_name}")
+              eplib.loginToTerraform()
+              terraformWorkspaceName = eplib.generateTerraformWorkspaceName("${params.TF_VAR_kubernetes_cluster_name}", "${params.TF_VAR_kubernetes_namespace}", "am-stack")
+              eplib.createTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.TF_VAR_kubernetes_namespace}")
 
-            // set Jenkins build description
-            currentBuild.description = eplib.getJenkinsDescription(params.destroy_mode)
+              // set Jenkins build description
+              currentBuild.description = eplib.getJenkinsDescription(params.destroy_mode)
+            }
           }
         }
       }
@@ -160,8 +159,7 @@ pipeline {
                 export TF_VAR_public_jwt_key="${publicJwtKey}"
                 export TF_VAR_registry_address="${dockerRegistryAddress}"
                 export TF_VAR_root_domain_name="${rootDomainName}"
-                terraform ${terraformOperation} -var-file=credentials.tfvars \
-                  -parallelism=50 -out=${tfPlanOutFile}
+                terraform ${terraformOperation} -parallelism=50 -out=${tfPlanOutFile}
               """
             }
           }
@@ -199,13 +197,10 @@ pipeline {
                 export TF_VAR_root_domain_name="${rootDomainName}"
                 terraform ${terraformOperation} -auto-approve -parallelism=50 ${terraformParams}
               """
-            }
-          }
 
-          // go back to root dir
-          script {
-            if (params.destroy_mode) {
-              eplib.deleteTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.TF_VAR_kubernetes_namespace}")
+              if (params.destroy_mode) {
+                eplib.deleteTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.TF_VAR_kubernetes_namespace}")
+              }
             }
           }
         }

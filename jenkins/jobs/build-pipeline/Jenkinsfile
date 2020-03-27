@@ -1,0 +1,483 @@
+// this bit is just plain Jenkins Groovy
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+def randomUUID = "${UUID.randomUUID().toString()}"
+def randomLabel = "jenkins-worker-${randomUUID}"
+def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
+def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+
+
+// this is a workaround until this bug is fixed: https://issues.jenkins-ci.org/browse/JENKINS-56943
+def podYamlFromFile = new File("${env.JENKINS_HOME}/workspace/build-pipeline@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/docker-4gb-2core-1container.yaml").text.trim();
+String podYaml = podYamlFromFile.replace('${dockerRegistryAddress}', "${dockerRegistryAddress}").replace('${jenkinsAgentImageTag}', "${jenkinsAgentImageTag}")
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent {
+    kubernetes {
+      label "${randomLabel}"
+      defaultContainer "jnlp"
+      yaml "${podYaml}"
+    }
+  }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
+    timeout(time: 5, unit: 'HOURS')
+  }
+  environment {
+    dockerImageTag          = "${params.epCommerceBranch}".replace('/','-');
+    runNonBlockingTests     = "${params.runNonBlockingTests}"
+    runBlockingTests        = "${params.runBlockingTests}"
+    buildPackage            = "${params.buildPackage}"
+    buildCoreContainers     = "${params.buildCoreContainers}"
+    buildCommerceContainers = "${params.buildCommerceContainers}"
+    deployActiveMq          = "${params.deployActiveMq}"
+    deployMySQL             = "${params.deployMySQL}"
+    deployEP                = "${params.deployEP}"
+    runDataPop              = "${params.runDataPop}"
+    dataPopToolCommand      = "${params.dataPopToolCommand}"
+    runCucumber             = "${params.runNonBlockingTests}"
+    deleteOldStack          = "${params.deleteOldStack}"
+    deleteActiveMQ          = "${params.deleteActiveMQ}"
+    deleteMySQLContainer    = "${params.deleteMySQLContainer}"
+    deleteNewStack          = "${params.deleteNewStack}"
+  }
+  stages {
+    stage('Load EP Lib and Build Lib') {
+      steps {
+        container('docker1') {
+          script {
+            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
+            buildlib = load "cloudops-for-kubernetes/lib/buildlib.groovy"
+          }
+        }
+      }
+    }
+    stage('Validate job parameters') {
+      steps {
+        container('docker1') {
+          script {
+            if (deleteMySQLContainer && !deleteOldStack) {
+              throw new Exception("deleteOldStack must be set to True if MySQL containers are marked for deletion")
+            }
+            if (deleteActiveMQ && !deleteOldStack) {
+              throw new Exception("deleteOldStack must be set to True if ActiveMQ containers are marked for deletion")
+            }
+          }
+        }
+      }
+    }
+    stage('parallel build and deploy to cluster, optionally run Itests and other JUnit Tests') {
+      parallel {
+        stage('Build and Deploy Commerce') {
+          stages {
+            stage('Prepare for Deployment') {
+              steps {
+                script { // We need to switch to scripted DSL for inner parallelization
+                  parallel (
+                    'BuildCode': {
+                      if ( "${buildPackage}" == "true" ) {
+                        buildDeploymentPackage()
+                      }
+                    },
+                    'Run Itest and JUnit Tests': {
+                      parallel(
+                        'RunItests': {
+                          if ( "${runBlockingTests}" == "true") {
+                            runCommerceTests('!commerce-engine/core/ep-core-itests,!extensions/cortex/system-tests/cucumber')
+                          }
+                        },
+                        'RunJUnitTests': {
+                          if ( "${runBlockingTests}" == "true") {
+                            runCommerceTests('commerce-engine/core/ep-core-itests, extensions/cortex/system-tests/cucumber')
+                          }
+                        }
+                      )
+                    }
+                  )
+                }
+              }
+            }  //PrepareForDeployment
+            stage('Build Core Docker Images') {
+              when {
+                expression { "${buildCoreContainers}" == "true" }
+              }
+              steps {
+                runBuildCoreContainers()
+              }
+            }
+            stage('Build Commerce Docker Images') {
+              when {
+                expression { "${buildCommerceContainers}" == "true" }
+              }
+              steps {
+                runBuildCommerceContainers()
+              }
+            }
+            stage('Delete Old Commerce Stack, ActiveMQ and MySQL Containers') {
+              steps {
+                script { // We need to switch to scripted DSL for inner parallelization
+                  parallel (
+                    'Delete Old Commerce Stack': {
+                      if ( "${deleteOldStack}" == "true" ) {
+                        deleteEPStack()
+                      }
+                    },
+                    'Delete ActiveMQ(optional)': {
+                      if ( "${deleteActiveMQ}" == "true" && "${deleteOldStack}" == "true" ) {
+                        deleteActiveMQ()
+                      }
+                    },
+                    'Delete MySQL(optional)': {
+                      if ( "${deleteMySQLContainer}" == "true" && "${deleteOldStack}" == "true") {
+                        deleteMySQLContainer()
+                      }
+                    }
+                  )
+                }
+              }
+            }
+            stage('Deploy MySql, ActiveMQ, and Run Datapop') {
+              steps {
+                script {  // We need to switch to scripted DSL for inner parallelization
+                  parallel (
+                    'Deploy MySQL and Run Datapop': {
+                      if ( "${deployMySQL}" == "true" ) {
+                        runDeployMySQL()
+                      }
+                      if ( "${runDataPop}" == "true" ) {
+                        runDataPop()
+                      }
+                    },
+                    'Deploy ActiveMQ(optional)': {
+                      if ( "${deployActiveMq}" == "true" ) {
+                        deployActiveMq()
+                      }
+                    }
+                  )
+                }
+              }
+            }
+            stage('Deploy New Commerce Stack') {
+              when {
+                expression { "${deployEP}" == "true"  }
+              }
+              steps {
+                runDeployEPStack()
+              }
+            }
+            stage('Run Cucumber Tests Against New Commerce Stack') {
+              when {
+                expression { "${runCucumber}" == "true"  }
+              }
+              steps {
+                runCucumberTests()
+              }
+            }
+            stage('Delete New Commerce Stack)') {
+              steps {
+                script { // We need to switch to scripted DSL for inner parallelization
+                  parallel(
+                    'Delete Commerce Stack': {
+                      if ( "${deleteNewStack}" == "true" ) {
+                        deleteEPStack()
+                      }
+                    },
+                    'Delete MySQL Container': {
+                      if ( "${deleteNewStack}" == "true" ) {
+                        deleteMySQLContainer()
+                      }
+                    },
+                    'Delete ActiveMQ Container': {
+                      if ( "${deleteNewStack}" == "true" ) {
+                        deleteActiveMQ()
+                      }
+                    }
+                  )
+                }
+              }
+            }
+          }
+        }
+        stage('Run Core Itests') {
+          when {
+            expression { "${runNonBlockingTests}" == "true"  }
+          }
+          steps {
+            script{
+              try {
+                runCommerceTests('!commerce-engine/core/ep-core-itests,!extensions/cortex/system-tests/cucumber')
+              }
+              catch (err) {
+                currentBuild.result = 'UNSTABLE'
+              }
+            }
+          }
+        }
+        stage('run other JUnit tests') {
+          when {
+            expression { "${runNonBlockingTests}" == "true"  }
+          }
+          steps {
+            script {
+              try {
+                runCommerceTests('commerce-engine/core/ep-core-itests, extensions/cortex/system-tests/cucumber')
+              }
+              catch (err) {
+                currentBuild.result = 'UNSTABLE'
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+
+void runCommerceTests(testString) {
+  echo "Calling job run-select-commerce-tests to run Junit tests"
+  job = 'run-select-commerce-tests'
+  parameters = [
+    string(name: 'epCommerceRepoURL', value: params.epCommerceRepoURL),
+    string(name: 'epCommerceBranch', value: params.epCommerceBranch),
+    string(name: 'cloudOpsForKubernetesBranch', value: params.cloudOpsForKubernetesBranch),
+    string(name: 'SELECTED_TEST_STRING', value: testString)
+  ]
+  buildlib.buildLocalJob(job, parameters)
+}
+
+void buildDeploymentPackage() {
+  echo "Calling job Build Deployment Package"
+  job = 'build-deployment-package'
+  parameters = [
+    string(name: 'cloudOpsForKubernetesBranch', value:   params.cloudOpsForKubernetesBranch),
+    string(name: 'epCommerceBranch', value: params.epCommerceBranch)
+  ]
+  buildlib.buildLocalJob(job, parameters)
+}
+
+void runBuildCommerceContainers() {
+  echo "calling job to build all commerce docker containers"
+  job = 'build-selected-docker-images'
+  parameters = [
+    booleanParam(name: 'buildBase', value: false),
+    booleanParam(name: 'buildDatapop', value: true),
+    booleanParam(name: 'buildMysql', value: false),
+    booleanParam(name: 'buildCortex', value: true),
+    booleanParam(name: 'buildSearch', value: true),
+    booleanParam(name: 'buildBatch', value: true),
+    booleanParam(name: 'buildIntegration', value: true),
+    booleanParam(name: 'buildCm', value: true),
+    booleanParam(name: 'buildDatasync', value: true),
+    booleanParam(name: 'buildActivemq', value: false),
+    booleanParam(name: 'infoPage', value: false),
+    string(name: 'cloudOpsForKubernetesBranch', value: params.cloudOpsForKubernetesBranch),
+    string(name: 'dockerRepoURL', value: params.dockerRepoURL),
+    string(name: 'dockerBranch', value: params.dockerBranch),
+    string(name: 'dockerCredentialId', value: 'gitCredentialId'),
+    string(name: 'tomcatVersion', value: '9.0.16'),
+    string(name: 'epCommerceBranch', value: params.epCommerceBranch),
+    string(name: 'deploymentPackageUrl', value: ''),
+    string(name: 'imageTag', value: dockerImageTag)
+  ]
+  buildlib.buildLocalJob(job, parameters)
+}
+
+void runBuildCoreContainers() {
+  echo "calling job to build all core docker containers"
+  job = 'build-selected-docker-images'
+  parameters = [
+    booleanParam(name: 'buildBase', value: true),
+    booleanParam(name: 'buildDatapop', value: false),
+    booleanParam(name: 'buildMysql', value: true),
+    booleanParam(name: 'buildCortex', value: false),
+    booleanParam(name: 'buildSearch', value: false),
+    booleanParam(name: 'buildBatch', value: false),
+    booleanParam(name: 'buildIntegration', value: false),
+    booleanParam(name: 'buildCm', value: false),
+    booleanParam(name: 'buildDatasync', value: false),
+    booleanParam(name: 'buildActivemq', value: true),
+    booleanParam(name: 'infoPage', value: true),
+    string(name: 'cloudOpsForKubernetesBranch', value: params.cloudOpsForKubernetesBranch),
+    string(name: 'dockerRepoURL', value: params.dockerRepoURL),
+    string(name: 'dockerBranch', value: params.dockerBranch),
+    string(name: 'dockerCredentialId', value: 'gitCredentialId'),
+    string(name: 'tomcatVersion', value: '9.0.16'),
+    string(name: 'epCommerceBranch', value: params.epCommerceBranch),
+    string(name: 'deploymentPackageUrl', value: ''),
+    string(name: 'imageTag', value: dockerImageTag)
+  ]
+  buildlib.buildLocalJob(job, parameters)
+}
+
+void deleteEPStack() {
+  echo "deleting EP stack"
+  job = 'deploy-or-delete-ep-stack'
+  parameters = [
+    booleanParam(name: 'deleteStack', value: true),
+    string(name: 'epStackResourcingProfile', value: 'dev'),
+    string(name: 'cloudOpsForKubernetesBranch', value: params.cloudOpsForKubernetesBranch),
+    string(name: 'epEnvironment', value: params.epEnvironment),
+    string(name: 'dockerImageTag', value: dockerImageTag),
+    string(name: 'kubernetesNamespace', value: params.kubernetesNamespace),
+    booleanParam(name: 'includeIngresses', value: true),
+    string(name: 'cmAllowedCIDR', value: params.allowedCidr),
+    string(name: 'integrationAllowedCIDR', value: params.allowedCidr),
+    string(name: 'cortexAllowedCIDR', value: params.allowedCidr),
+    string(name: 'studioAllowedCIDR', value: params.allowedCidr),
+    booleanParam(name: 'includeHorizontalPodAutoscalers', value: false),
+    booleanParam(name: 'includeDeploymentInfoPage', value: true),
+    string(name: 'infoPageAllowedCIDR', value: params.allowedCidr),
+    booleanParam(name: 'enableUITests', value: false),
+    booleanParam(name: 'epChangesetsEnabled', value: false),
+    booleanParam(name: 'deployDstWebapp', value: false),
+    string(name: 'targetNamespace', value: ''),
+    string(name: 'targetJMSServerName', value: ''),
+    string(name: 'targetDBServerName', value: ''),
+    string(name: 'dnsSubDomain', value: params.dnsSubDomain),
+    string(name: 'clusterName', value: params.clusterName),
+    string(name: 'dnsZoneName', value: params.dnsZoneName),
+    string(name: 'smtpHost', value: ''),
+    string(name: 'smtpPort', value: ''),
+    string(name: 'smtpScheme', value: ''),
+    string(name: 'smtpUser', value: ''),
+    [$class: 'com.michelin.cio.hudson.plugins.passwordparam.PasswordParameterValue', description: 'The password for the connection to the SMTP server.', name: 'smtpPass', value: ''],
+    string(name: 'dbServerName', value: params.clusterName + params.dnsSubDomain + 'mysql'),
+    string(name: 'jmsServerName', value: params.clusterName + params.dnsSubDomain + 'mq'),
+    booleanParam(name: 'enableJmx', value: true),
+    booleanParam(name: 'enableJmxAuth', value: false),
+    booleanParam(name: 'enableDebug', value: true)
+  ]
+  buildlib.buildLocalJob(job, parameters)
+}
+
+void deleteActiveMQ() {
+  echo "deleting activeMQ container"
+  job = 'create-or-delete-activemq-container'
+  parameters = [booleanParam(name: 'deleteContainer', value: true),
+  string(name: 'cloudOpsForKubernetesBranch', value: params.cloudOpsForKubernetesBranch),
+  string(name: 'serverName', value: params.clusterName + params.dnsSubDomain  + 'mq'),
+  string(name: 'activeMQAllowedCIDR', value: "127.0.0.1/32"),
+  string(name: 'kubernetesNamespace', value: params.kubernetesNamespace),
+  string(name: 'imageTag', value: dockerImageTag),
+  string(name: 'dnsSubDomain', value: params.dnsSubDomain),
+  string(name: 'clusterName', value: params.clusterName),
+  string(name: 'dnsZoneName', value: params.dnsZoneName)
+  ]
+  buildlib.buildLocalJob(job, parameters)
+}
+
+void deleteMySQLContainer() {
+  echo "deleting mySQL container"
+  job = 'create-or-delete-mysql-container'
+  parameters = [
+    booleanParam(name: 'deleteContainer', value: true),
+    string(name: 'cloudOpsForKubernetesBranch', value: params.cloudOpsForKubernetesBranch),
+    string(name: 'serverName', value: params.clusterName + params.dnsSubDomain + 'mysql'),
+    string(name: 'kubernetesNamespace', value: params.kubernetesNamespace),
+    string(name: 'imageTag', value: dockerImageTag),
+    string(name: 'clusterName', value: params.clusterName)
+  ]
+  buildlib.buildLocalJob(job, parameters)
+}
+
+void runDeployMySQL() {
+  echo "running Deploy MySQL container job"
+  job = 'create-or-delete-mysql-container'
+  parameters = [
+    booleanParam(name: 'deleteContainer', value: false),
+    string(name: 'cloudOpsForKubernetesBranch', value: params.cloudOpsForKubernetesBranch),
+    string(name: 'serverName', value: params.clusterName + params.dnsSubDomain + 'mysql'),
+    string(name: 'kubernetesNamespace', value: params.kubernetesNamespace),
+    string(name: 'imageTag', value: dockerImageTag),
+    string(name: 'clusterName', value: params.clusterName)
+  ]
+  buildlib.buildLocalJob(job, parameters)
+}
+
+void runDataPop() {
+  echo "running DataPop Job"
+  job = 'run-data-pop-tool'
+  parameters = [
+    string(name: 'cloudOpsForKubernetesBranch', value: params.cloudOpsForKubernetesBranch),
+    string(name: 'serverName', value: params.clusterName + params.dnsSubDomain + 'mysql'),
+    string(name: 'jmsServerName', value: params.clusterName + params.dnsSubDomain + 'mq'),
+    string(name: 'kubernetesNamespace', value: params.kubernetesNamespace),
+    string(name: 'dataPopToolCommand', value: dataPopToolCommand),
+    string(name: 'epEnvironment', value: params.epEnvironment),
+    string(name: 'imageTag', value: dockerImageTag),
+    string(name: 'clusterName', value: params.clusterName)
+  ]
+  buildlib.buildLocalJob(job, parameters)
+}
+
+void deployActiveMq() {
+  echo "running deploy ActiveMQ"
+  job = 'create-or-delete-activemq-container'
+  parameters = [
+    booleanParam(name: 'deleteContainer', value: false),
+    string(name: 'cloudOpsForKubernetesBranch', value: params.cloudOpsForKubernetesBranch),
+    string(name: 'serverName', value: params.clusterName + params.dnsSubDomain  + 'mq'),
+    string(name: 'activeMQAllowedCIDR', value: "127.0.0.1/32"),
+    string(name: 'kubernetesNamespace', value: params.kubernetesNamespace),
+    string(name: 'imageTag', value: dockerImageTag),
+    string(name: 'dnsSubDomain', value: params.dnsSubDomain),
+    string(name: 'clusterName', value: params.clusterName),
+    string(name: 'dnsZoneName', value: params.dnsZoneName)
+  ]
+  buildlib.buildLocalJob(job, parameters)
+}
+
+void runDeployEPStack() {
+  echo "running DeployEPStack"
+  job = 'deploy-or-delete-ep-stack'
+  parameters = [
+    booleanParam(name: 'deleteStack', value: false),
+    string(name: 'epStackResourcingProfile', value: 'dev'),
+    string(name: 'cloudOpsForKubernetesBranch', value: params.cloudOpsForKubernetesBranch),
+    string(name: 'epEnvironment', value: params.epEnvironment),
+    string(name: 'dockerImageTag', value: dockerImageTag),
+    string(name: 'kubernetesNamespace', value: params.kubernetesNamespace),
+    booleanParam(name: 'includeIngresses', value: true),
+    string(name: 'cmAllowedCIDR', value: params.allowedCidr),
+    string(name: 'integrationAllowedCIDR', value: params.allowedCidr),
+    string(name: 'cortexAllowedCIDR', value: params.allowedCidr),
+    string(name: 'studioAllowedCIDR', value: params.allowedCidr),
+    booleanParam(name: 'includeHorizontalPodAutoscalers', value: false),
+    booleanParam(name: 'includeDeploymentInfoPage', value: true),
+    string(name: 'infoPageAllowedCIDR', value: params.allowedCidr),
+    booleanParam(name: 'enableUITests', value: false),
+    booleanParam(name: 'epChangesetsEnabled', value: false),
+    booleanParam(name: 'deployDstWebapp', value: false),
+    string(name: 'targetNamespace', value: ''),
+    string(name: 'targetJMSServerName', value: ''),
+    string(name: 'targetDBServerName', value: ''),
+    string(name: 'dnsSubDomain', value: params.dnsSubDomain),
+    string(name: 'clusterName', value: params.clusterName),
+    string(name: 'dnsZoneName', value: params.dnsZoneName),
+    string(name: 'smtpHost', value: ''),
+    string(name: 'smtpPort', value: ''),
+    string(name: 'smtpScheme', value: ''),
+    string(name: 'smtpUser', value: ''),
+    [$class: 'com.michelin.cio.hudson.plugins.passwordparam.PasswordParameterValue', description: 'The password for the connection to the SMTP server.', name: 'smtpPass', value: ''],
+    string(name: 'dbServerName', value: params.clusterName + params.dnsSubDomain + 'mysql'),
+    string(name: 'jmsServerName', value: params.clusterName + params.dnsSubDomain + 'mq'),
+    booleanParam(name: 'enableJmx', value: true),
+    booleanParam(name: 'enableJmxAuth', value: false),
+    booleanParam(name: 'enableDebug', value: true)
+  ]
+  buildlib.buildLocalJob(job, parameters)
+}
+
+void runCucumberTests() {
+  job = 'run-cortex-system-tests'
+  parameters = [
+    string(name: 'kubernetesNamespace', value: params.kubernetesNamespace),
+    string(name: 'jmsServerName', value: params.clusterName + params.dnsSubDomain + 'mq'),
+    string(name: 'cloudOpsForKubernetesBranch', value: params.cloudOpsForKubernetesBranch),
+    string(name: 'epCommerceBranch', value: params.epCommerceBranch)
+  ]
+  buildlib.buildLocalJob(job, parameters)
+}

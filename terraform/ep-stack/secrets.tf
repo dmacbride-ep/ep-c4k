@@ -47,13 +47,13 @@ resource "kubernetes_secret" "ep-stack-secret" {
     EP_DB_CM_CONNECTION_PROPERTIES = "serverTimezone=UTC;useLegacyDatetimeCode=false"
 
     # Memory settings
-    EP_CONTAINER_MEM_CM           = local.ep_stack_resourcing_proflies["cm"][var.ep_resourcing_profile]["jvm-memory"]
-    EP_CONTAINER_MEM_CORTEX       = local.ep_stack_resourcing_proflies["cortex"][var.ep_resourcing_profile]["jvm-memory"]
-    EP_CONTAINER_MEM_SEARCH       = local.ep_stack_resourcing_proflies["searchmaster"][var.ep_resourcing_profile]["jvm-memory"]
-    EP_CONTAINER_MEM_SEARCH_SLAVE = local.ep_stack_resourcing_proflies["searchslave"][var.ep_resourcing_profile]["jvm-memory"]
-    EP_CONTAINER_MEM_BATCH        = local.ep_stack_resourcing_proflies["batch"][var.ep_resourcing_profile]["jvm-memory"]
-    EP_CONTAINER_MEM_INTEGRATION  = local.ep_stack_resourcing_proflies["integration"][var.ep_resourcing_profile]["jvm-memory"]
-    EP_CONTAINER_MEM_SYNC         = local.ep_stack_resourcing_proflies["data-sync"][var.ep_resourcing_profile]["jvm-memory"]
+    EP_CONTAINER_MEM_CM           = local.commerce_profiles["cm"][var.ep_resourcing_profile]["jvm-memory"]
+    EP_CONTAINER_MEM_CORTEX       = local.commerce_profiles["cortex"][var.ep_resourcing_profile]["jvm-memory"]
+    EP_CONTAINER_MEM_SEARCH       = local.commerce_profiles["searchmaster"][var.ep_resourcing_profile]["jvm-memory"]
+    EP_CONTAINER_MEM_SEARCH_SLAVE = local.commerce_profiles["searchslave"][var.ep_resourcing_profile]["jvm-memory"]
+    EP_CONTAINER_MEM_BATCH        = local.commerce_profiles["batch"][var.ep_resourcing_profile]["jvm-memory"]
+    EP_CONTAINER_MEM_INTEGRATION  = local.commerce_profiles["integration"][var.ep_resourcing_profile]["jvm-memory"]
+    EP_CONTAINER_MEM_SYNC         = local.commerce_profiles["data-sync"][var.ep_resourcing_profile]["jvm-memory"]
 
     #Tomcat cache size
     EP_CONTAINER_CACHESIZE = "100000"
@@ -84,7 +84,7 @@ resource "kubernetes_secret" "ep-stack-secret" {
     EP_INTEGRATION_ROLE = "standalone"
 
     # EP cloud provider
-    EP_CLOUD_PROVIDER = "azure"
+    EP_CLOUD_PROVIDER = "${var.cloud}"
 
     EP_X_JVM_ARGS = "${var.ep_x_jvm_args}"
 

@@ -157,12 +157,12 @@ resource "kubernetes_deployment" "ep_data_sync_deployment" {
           }
           resources {
             limits {
-              cpu    = local.ep_stack_resourcing_proflies["data-sync"][var.ep_resourcing_profile]["cpu-cores"]
-              memory = local.ep_stack_resourcing_proflies["data-sync"][var.ep_resourcing_profile]["memory"]
+              cpu    = local.commerce_profiles["data-sync"][var.ep_resourcing_profile]["cpu-cores"]
+              memory = local.commerce_profiles["data-sync"][var.ep_resourcing_profile]["memory"]
             }
             requests {
-              cpu    = local.ep_stack_resourcing_proflies["data-sync"][var.ep_resourcing_profile]["cpu-cores"]
-              memory = local.ep_stack_resourcing_proflies["data-sync"][var.ep_resourcing_profile]["memory"]
+              cpu    = local.commerce_profiles["data-sync"][var.ep_resourcing_profile]["cpu-cores"]
+              memory = local.commerce_profiles["data-sync"][var.ep_resourcing_profile]["memory"]
             }
           }
           liveness_probe {

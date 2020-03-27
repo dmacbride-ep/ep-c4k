@@ -21,6 +21,6 @@ resource "kubernetes_service" "ep_activemq_service" {
       app = "ep-activemq-${var.jms_name}"
     }
     type                        = "LoadBalancer"
-    load_balancer_source_ranges = ["${var.activemq_allowed_cidr}"]
+    load_balancer_source_ranges = split(",", var.activemq_allowed_cidr)
   }
 }

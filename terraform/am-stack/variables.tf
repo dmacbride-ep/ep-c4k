@@ -66,6 +66,7 @@ variable "oidc_client_secret" {
 
 variable "oidc_token_scope" {
   type = string
+  default = ""
 }
 
 variable "oidc_group_key" {

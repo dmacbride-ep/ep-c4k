@@ -15,6 +15,7 @@ def epCommerceCredentialId = "gitCredentialId";
 
 def dockerRepoURL = new File(secretsDirectory, "dockerRepoURL").text.trim();
 def dockerDefaultBranch = new File(secretsDirectory, "dockerDefaultBranch").text.trim();
+def tagSafeBranch = dockerDefaultBranch.replace('/','-')
 def dockerCredentialId = "gitCredentialId";
 def tomcatVersion = new File(secretsDirectory, "tomcatVersion").text.trim();
 
@@ -49,64 +50,6 @@ def rootDomainName = new File(secretsDirectory, "domainName").text.trim();
 
 def defaultAmReleasePackageUrl = new File(secretsDirectory, "defaultAmReleasePackageUrl").text.trim();
 
-// this map provides:
-// 1. names for the test jobs (as the keys of the map)
-// 2. settings in each job that differ between the jobs
-def testJobsMap = [
-  "nightly-ci-commerce-7.5.x": [
-    "build-schedule": "H H(8-12) * * *",
-    "parameters": [
-      "resourceGroup": "k8sci75",
-      "kubernetesClusterName": "hub",
-      "domainName": "k8sci75.${cloud}.epcloudops.com",
-      "epCommerceRepoURL": "git@code.elasticpath.com:ep-commerce/ep-commerce.git",
-      "epCommerceBranch": "release/7.5.x",
-      "epCortexMavenRepoUrl": "https://repository.elasticpath.com/nexus/content/repositories/cortex/",
-      "epCommerceEngineMavenRepoUrl": "https://repository.elasticpath.com/nexus/content/repositories/commerce-engine/",
-      "epAcceleratorsMavenRepoUrl": "https://repository.elasticpath.com/nexus/content/repositories/accelerators/"
-      ]
-    ],
-  "nightly-ci-commerce-7.6.x": [
-    "build-schedule": "H H(8-12) * * *",
-    "parameters": [
-      "resourceGroup": "k8sci76",
-      "kubernetesClusterName": "hub",
-      "domainName": "k8sci76.${cloud}.epcloudops.com",
-      "epCommerceRepoURL": "git@code.elasticpath.com:ep-commerce/ep-commerce.git",
-      "epCommerceBranch": "release/7.6.x",
-      "epCortexMavenRepoUrl": "https://repository.elasticpath.com/nexus/content/repositories/cortex/",
-      "epCommerceEngineMavenRepoUrl": "https://repository.elasticpath.com/nexus/content/repositories/commerce-engine/",
-      "epAcceleratorsMavenRepoUrl": "https://repository.elasticpath.com/nexus/content/repositories/accelerators/"
-      ]
-    ],
-  "nightly-ci-commerce-master": [
-    "build-schedule": "H H(8-12) * * *",
-    "parameters": [
-      "resourceGroup": "k8scimaster",
-      "kubernetesClusterName": "hub",
-      "domainName": "k8scimaster.${cloud}.epcloudops.com",
-      "epCommerceRepoURL": "git@code.elasticpath.com:ep-cloudops-TEST/ep-commerce-pebbles.git",
-      "epCommerceBranch": "master",
-      "epCortexMavenRepoUrl": "https://repository.elasticpath.com/nexus/content/repositories/cortex-staging/",
-      "epCommerceEngineMavenRepoUrl": "https://repository.elasticpath.com/nexus/content/repositories/commerce-engine-staging/",
-      "epAcceleratorsMavenRepoUrl": "https://repository.elasticpath.com/nexus/content/repositories/accelerators-staging/"
-      ]
-    ],
-  "on-demand-ci": [
-    "build-schedule": "",
-    "parameters": [
-      "resourceGroup": "",
-      "kubernetesClusterName": "hub",
-      "domainName": "",
-      "epCommerceRepoURL": "git@code.elasticpath.com:ep-commerce/ep-commerce.git",
-      "epCommerceBranch": "release/7.5.x",
-      "epCortexMavenRepoUrl": "https://repository.elasticpath.com/nexus/content/repositories/cortex/",
-      "epCommerceEngineMavenRepoUrl": "https://repository.elasticpath.com/nexus/content/repositories/commerce-engine/",
-      "epAcceleratorsMavenRepoUrl": "https://repository.elasticpath.com/nexus/content/repositories/accelerators/"
-      ]
-    ]
-  ]
-
 // for the syntax for the content of this file, see: https://jenkinsci.github.io/job-dsl-plugin/
 
 listView('Jenkins') {
@@ -124,23 +67,13 @@ listView('Jenkins') {
   }
 }
 
-listView('Build') {
+listView('Commerce Build') {
   jobs {
     name('build-deployment-package')
     name('build-core-images')
-    name('build-app-images')
-    name('build-docker-images')
-    name('build-base-image')
-    name('build-data-pop')
-    name('build-mysql')
-    name('build-activemq')
-    name('build-infopage')
-    name('build-cortex')
-    name('build-search')
-    name('build-cm')
-    name('build-integration')
-    name('build-batch')
-    name('build-data-sync')
+    name('build-commerce-images')
+    name('build-selected-docker-images')
+    name('build-pipeline')
   }
   columns {
     status()
@@ -153,10 +86,11 @@ listView('Build') {
   }
 }
 
-listView('Deployment') {
+listView('Commerce Deploy') {
   jobs {
     name('create-or-delete-mysql-server')
     name('create-or-delete-mysql-container')
+    name('create-or-delete-activemq-container')
     name('run-data-pop-tool')
     name('deploy-or-delete-ep-stack')
   }
@@ -168,29 +102,6 @@ listView('Deployment') {
     lastFailure()
     lastDuration()
     buildButton()
-  }
-}
-
-listView('Test') {
-  jobs {
-    testJobsMap.each { testJobName, testJobConfigMap ->
-      name("${testJobName}")
-    }
-  }
-  columns {
-    status()
-    weather()
-    name()
-    lastSuccess()
-    lastFailure()
-    lastDuration()
-    buildButton()
-  }
-}
-
-buildMonitorView('Build Monitor') {
-  jobs {
-    regex('nightly-.+')
   }
 }
 
@@ -220,10 +131,10 @@ pipelineJob('build-jenkins-agents') {
   }
   parameters {
     stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
+    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The CloudOps for Kubernetes branch to use for the Jenkinsfile.')
   }
   triggers {
-    cron('H * * * *')
+    cron('H 4 * * *')
   }
 }
 queue('build-jenkins-agents')
@@ -254,22 +165,21 @@ pipelineJob('build-deployment-package') {
   }
   parameters {
     stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
+    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The CloudOps for Kubernetes branch to use for the Jenkinsfile.')
     stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code.')
     stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce to use.')
     stringParam('epCommerceCredentialId', epCommerceCredentialId, 'The Jenkins credentials to use when checking out the ep-commerce code.')
   }
 }
 
-
-pipelineJob('build-docker-images') {
+pipelineJob('build-selected-docker-images') {
   definition {
     cpsScm {
       scm {
         git {
           remote {
             name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
+            url(cloudOpsForKubernetesRepoURL)
             credentials(cloudOpsForKubernetesCredentialId)
           }
           extensions {
@@ -283,31 +193,27 @@ pipelineJob('build-docker-images') {
         }
       }
       lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/buildJobs/build-new-images/Jenkinsfile')
+      scriptPath('cloudops-for-kubernetes/jenkins/jobs/docker-build-jobs/build-selected-docker-images/Jenkinsfile')
     }
   }
   parameters {
-    // customization point to not have to build all jobs for every run
-    booleanParam('buildBase', false, 'When checked, this Image will be built')
-    booleanParam('buildDatapop', true, 'When checked, this Image will be built')
-    booleanParam('buildMysql', false, 'When checked, this Image will be built')
-    booleanParam('buildActivemq', false, 'When checked, this Image will be built')
-    booleanParam('buildCortex', true, 'When checked, this Image will be built')
-    booleanParam('buildSearch', true, 'When checked, this Image will be built')
-    booleanParam('buildBatch', true, 'When checked, this Image will be built')
-    booleanParam('buildIntegration', true, 'When checked, this Image will be built')
-    booleanParam('buildCm', true, 'When checked, this Image will be built')
-    booleanParam('buildDatasync', true, 'When checked, this Image will be built')
-    booleanParam('infoPage', false, 'When checked, this Image will be built')
-    stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
-    stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
-    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
-    stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to download and use. For EP Commerce 7.5 and 7.6 use 9.0.16.')
-    stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('deploymentPackageUrl', '', 'Build docker images with this deployment package. Optional, instead of building a deployment package with the Jenkins job use a package uploaded into a storage service.')
+    booleanParam('buildBase', false, 'Build the CloudOps base images')
+    booleanParam('buildDatapop', true, 'Build the data-pop-tool image')
+    booleanParam('buildMysql', false, 'Build the CloudOps mysql image')
+    booleanParam('buildActivemq', false, 'Build the CloudOps activemq image')
+    booleanParam('buildCortex', true, 'Build the cortex image')
+    booleanParam('buildSearch', true, 'Build the search image')
+    booleanParam('buildBatch', true, 'Build the batch image')
+    booleanParam('buildIntegration', true, 'Build the integration image')
+    booleanParam('buildCm', true, 'Build the cm image')
+    booleanParam('buildDatasync', true, 'Build the data-sync image')
+    booleanParam('infoPage', false, 'Build the info-page image')
+    stringParam('imageTag', tagSafeBranch, 'Value to tag the built Docker images')
+    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The CloudOps for Kubernetes branch to use for the Jenkinsfiles.')
+    stringParam('dockerBranch', dockerDefaultBranch, 'The EP Docker branch to use for certain Dockerfiles.')
+    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The EP Commerce branch. This is used to find the last successful build of the build-deployment-package job with the same value.')
+    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat base image to build and/or use. For EP Commerce 7.5, 7.6 and 8.0 use 9.0.16.')
+    stringParam('deploymentPackageUrl', '', '(Optional) Build Elastic Path application Docker images with this deployment package instead of the package built by the last build-deployment-package job run with the provided Commerce branch.')
   }
 }
 
@@ -318,7 +224,7 @@ pipelineJob('build-core-images') {
         git {
           remote {
             name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
+            url(cloudOpsForKubernetesRepoURL)
             credentials(cloudOpsForKubernetesCredentialId)
           }
           extensions {
@@ -332,28 +238,25 @@ pipelineJob('build-core-images') {
         }
       }
       lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/build-core-images/Jenkinsfile')
+      scriptPath('cloudops-for-kubernetes/jenkins/jobs/docker-build-jobs/build-core-images/Jenkinsfile')
     }
   }
   parameters {
-    stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
-    stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
-    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
-    stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
+    stringParam('imageTag', tagSafeBranch, 'Value to tag the built Docker images')
+    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to build the base Tomcat image with. For EP Commerce 7.5, 7.6 and 8.0 use 9.0.16.')
+    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of Cloudops for Kubernetes to use for the Jenkinsfiles.')
+    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of EP Docker to use for the Dockerfiles.')
   }
 }
 
-pipelineJob('build-app-images') {
+pipelineJob('build-commerce-images') {
   definition {
     cpsScm {
       scm {
         git {
           remote {
             name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
+            url(cloudOpsForKubernetesRepoURL)
             credentials(cloudOpsForKubernetesCredentialId)
           }
           extensions {
@@ -367,34 +270,32 @@ pipelineJob('build-app-images') {
         }
       }
       lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/build-app-images/Jenkinsfile')
+      scriptPath('cloudops-for-kubernetes/jenkins/jobs/docker-build-jobs/build-commerce-images/Jenkinsfile')
     }
   }
   parameters {
-    stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
-    stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
-    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
-    stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
+    stringParam('imageTag', tagSafeBranch, 'Value to tag the built Docker images')
+    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to download and use. For EP Commerce 7.5, 7.6 and 8.0 use 9.0.16.')
+    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The CloudOps for Kubernetes branch to use for the Jenkinsfile.')
+    stringParam('dockerBranch', dockerDefaultBranch, 'The EP Docker branch to use.')
+    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The EP Commerce branch. This is used to find the last successful build of the build-deployment-package job with the same value.')
   }
 }
 
-pipelineJob('build-base-image') {
+pipelineJob('build-pipeline') {
   definition {
     cpsScm {
       scm {
         git {
           remote {
             name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
+            url(cloudOpsForKubernetesRepoURL)
             credentials(cloudOpsForKubernetesCredentialId)
           }
           extensions {
             cloneOptions {
               shallow(true)
-              depth(10)
+              depth(1)
             }
             relativeTargetDirectory('cloudops-for-kubernetes')
           }
@@ -402,19 +303,37 @@ pipelineJob('build-base-image') {
         }
       }
       lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/buildJobs/build-base-image/Jenkinsfile')
+      scriptPath('cloudops-for-kubernetes/jenkins/jobs/build-pipeline/Jenkinsfile')
     }
   }
   parameters {
+    booleanParam('buildPackage', true, 'whether or not to build new deployment package for this job')
+    booleanParam('buildCoreContainers', true, 'whether or not to build new core docker containers for this job')
+    booleanParam('buildCommerceContainers', true, 'whether or not to build new commerce docker containers for this job')
+    booleanParam('runBlockingTests', true, 'whether or not to run blocking tests for this job')
+    booleanParam('runNonBlockingTests', true, 'whether or not to run non-blocking tests for this job')
+    booleanParam('deployActiveMq', true, 'whether or not to build deploy activemq container for this job')
+    booleanParam('deployMySQL', true, 'whether or not to deploy mysql container for this job')
+    booleanParam('deployEP', true, 'whether or not to deploy ep stack for this job')
+    booleanParam('runDataPop', true, 'whether or not to run data pop for this job')
+    booleanParam('deleteOldStack', true, 'whether or not to delete the previous stack for this build.')
+    booleanParam('deleteNewStack', true, 'whether or not to delete the newly created EP stack if it passes all cucumber tests.')
+    booleanParam('deleteActiveMQ', true, 'Whether or not to delete the old ActiveMQ container along with the EP stack.  Does nothing if deleteOldStack is set to false.')
+    booleanParam('deleteMySQLContainer', true, 'Whether or not to delete the old MySQL container along with the EP stack.  Does nothing if deleteOldStack is set to false.')
     stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
     stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
     stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
     stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
     stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to download and use. For EP Commerce 7.5 and 7.6 use 9.0.16.')
     stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
     stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('deploymentPackageUrl', '', 'Build docker images with this deployment package. Optional, instead of building a deployment package with the Jenkins job use a package uploaded into a storage service.')
+    stringParam('allowedCidr','','The CIDR of IPs which are allowed access to this deployment of the EP stack')
+    stringParam('dnsZoneName', rootDomainName)
+    stringParam('clusterName','','The name of the kubernetes cluster to deploy to')
+    stringParam('dnsSubDomain','','The DNS subdomain to use for the environment.')
+    stringParam('epEnvironment','ci','The ep environment to deploy using datapop')
+    stringParam('dataPopToolCommand', '', 'The data-pop-tool command to run on the database.\nMust be either reset-db or update-db.')
+    stringParam('kubernetesNamespace', 'default', 'The Kubernetes namespace that will store database connection information. Creates the namespace if it does not exist. To ensure the MySQL server is deleted by this job an Elastic Path stack must be deployed in the same Kubernetes namespace.')
   }
 }
 
@@ -425,7 +344,7 @@ pipelineJob('build-data-pop') {
         git {
           remote {
             name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
+            url(cloudOpsForKubernetesRepoURL)
             credentials(cloudOpsForKubernetesCredentialId)
           }
           extensions {
@@ -439,19 +358,47 @@ pipelineJob('build-data-pop') {
         }
       }
       lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/buildJobs/build-data-pop/Jenkinsfile')
+      scriptPath('cloudops-for-kubernetes/jenkins/jobs/docker-build-jobs/build-data-pop/Jenkinsfile')
     }
   }
   parameters {
-    stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
-    stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
-    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
-    stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to download and use. For EP Commerce 7.5 and 7.6 use 9.0.16.')
-    stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('deploymentPackageUrl', '', 'Build docker images with this deployment package. Optional, instead of building a deployment package with the Jenkins job use a package uploaded into a storage service.')
+    stringParam('imageTag', tagSafeBranch, 'Value to tag the built Docker image')
+    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The CloudOps for Kubernetes branch to use for the Jenkinsfile.')
+    stringParam('dockerBranch', dockerDefaultBranch, 'The EP Docker branch to use for the Dockerfile.')
+    stringParam('tomcatVersion', tomcatVersion, 'The Tomcat version to build the image with. For EP Commerce 7.5, 7.6 and 8.0 use 9.0.16.')
+    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The EP Commerce branch. This is used to find the last successful build of the build-deployment-package job with the same value.')
+    stringParam('deploymentPackageUrl', '', '(Optional) Build the image with this deployment package instead of the package defined by epCommerceBranch')
+  }
+}
+
+pipelineJob('build-base-image') {
+  definition {
+    cpsScm {
+      scm {
+        git {
+          remote {
+            name('origin')
+            url(cloudOpsForKubernetesRepoURL)
+            credentials(cloudOpsForKubernetesCredentialId)
+          }
+          extensions {
+            cloneOptions {
+              shallow(true)
+              depth(10)
+            }
+            relativeTargetDirectory('cloudops-for-kubernetes')
+          }
+          branch('${cloudOpsForKubernetesBranch}')
+        }
+      }
+      lightweight(false)
+      scriptPath('cloudops-for-kubernetes/jenkins/jobs/docker-build-jobs/build-base-image/Jenkinsfile')
+    }
+  }
+  parameters {
+    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The CloudOps for Kubernetes branch to use for the Jenkinsfile.')
+    stringParam('dockerBranch', dockerDefaultBranch, 'The EP Docker branch to use for the Dockerfiles.')
+    stringParam('tomcatVersion', tomcatVersion, 'The Tomcat version to build the Tomcat base image with. For EP Commerce 7.5, 7.6 and 8.0 use 9.0.16.')
   }
 }
 
@@ -462,7 +409,7 @@ pipelineJob('build-mysql') {
         git {
           remote {
             name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
+            url(cloudOpsForKubernetesRepoURL)
             credentials(cloudOpsForKubernetesCredentialId)
           }
           extensions {
@@ -476,19 +423,13 @@ pipelineJob('build-mysql') {
         }
       }
       lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/buildJobs/build-mysql/Jenkinsfile')
+      scriptPath('cloudops-for-kubernetes/jenkins/jobs/docker-build-jobs/build-mysql/Jenkinsfile')
     }
   }
   parameters {
-    stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
-    stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
-    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
-    stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to download and use. For EP Commerce 7.5 and 7.6 use 9.0.16.')
-    stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('deploymentPackageUrl', '', 'Build docker images with this deployment package. Optional, instead of building a deployment package with the Jenkins job use a package uploaded into a storage service.')
+    stringParam('imageTag', tagSafeBranch, 'Value to tag the built Docker image')
+    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The CloudOps for Kubernetes branch to use for the Jenkinsfile.')
+    stringParam('dockerBranch', dockerDefaultBranch, 'The EP Docker branch to use for the Dockerfile.')
   }
 }
 
@@ -499,7 +440,7 @@ pipelineJob('build-activemq') {
         git {
           remote {
             name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
+            url(cloudOpsForKubernetesRepoURL)
             credentials(cloudOpsForKubernetesCredentialId)
           }
           extensions {
@@ -513,19 +454,13 @@ pipelineJob('build-activemq') {
         }
       }
       lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/buildJobs/build-activemq/Jenkinsfile')
+      scriptPath('cloudops-for-kubernetes/jenkins/jobs/docker-build-jobs/build-activemq/Jenkinsfile')
     }
   }
   parameters {
-    stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
-    stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
-    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
-    stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to download and use. For EP Commerce 7.5 and 7.6 use 9.0.16.')
-    stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('deploymentPackageUrl', '', 'Build docker images with this deployment package. Optional, instead of building a deployment package with the Jenkins job use a package uploaded into a storage service.')
+    stringParam('imageTag', tagSafeBranch, 'Value to tag the built Docker image')
+    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The CloudOps for Kubernetes branch to use for the Jenkinsfile.')
+    stringParam('dockerBranch', dockerDefaultBranch, 'The EP Docker branch to use for the Dockerfile.')
   }
 }
 
@@ -536,7 +471,7 @@ pipelineJob('build-infopage') {
         git {
           remote {
             name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
+            url(cloudOpsForKubernetesRepoURL)
             credentials(cloudOpsForKubernetesCredentialId)
           }
           extensions {
@@ -550,247 +485,57 @@ pipelineJob('build-infopage') {
         }
       }
       lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/buildJobs/build-infopage/Jenkinsfile')
+      scriptPath('cloudops-for-kubernetes/jenkins/jobs/docker-build-jobs/build-infopage/Jenkinsfile')
     }
   }
   parameters {
-    stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
-    stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
-    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
-    stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to download and use. For EP Commerce 7.5 and 7.6 use 9.0.16.')
-    stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('deploymentPackageUrl', '', 'Build docker images with this deployment package. Optional, instead of building a deployment package with the Jenkins job use a package uploaded into a storage service.')
+    stringParam('imageTag', tagSafeBranch, 'Value to tag the built Docker image')
+    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The CloudOps for Kubernetes branch to use for the Jenkinsfile and Dockerfile.')
   }
 }
 
-pipelineJob('build-cortex') {
-  definition {
-    cpsScm {
-      scm {
-        git {
-          remote {
-            name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
-            credentials(cloudOpsForKubernetesCredentialId)
-          }
-          extensions {
-            cloneOptions {
-              shallow(true)
-              depth(10)
-            }
-            relativeTargetDirectory('cloudops-for-kubernetes')
-          }
-          branch('${cloudOpsForKubernetesBranch}')
-        }
-      }
-      lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/buildJobs/build-app/Jenkinsfile')
-    }
-  }
-  parameters {
-    stringParam('epAppInBuild', 'cortex','Which EP app to build')
-    stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
-    stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
-    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
-    stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to download and use. For EP Commerce 7.5 and 7.6 use 9.0.16.')
-    stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('deploymentPackageUrl', '', 'Build docker images with this deployment package. Optional, instead of building a deployment package with the Jenkins job use a package uploaded into a storage service.')
-  }
-}
+def appDockerBuildMap = [
+  "cortex",
+  "search",
+  "batch",
+  "integration",
+  "cm",
+  "data-sync"
+]
 
-pipelineJob('build-search') {
-  definition {
-    cpsScm {
-      scm {
-        git {
-          remote {
-            name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
-            credentials(cloudOpsForKubernetesCredentialId)
-          }
-          extensions {
-            cloneOptions {
-              shallow(true)
-              depth(10)
+for(app in appDockerBuildMap) {
+  pipelineJob("build-${app}") {
+    definition {
+      cpsScm {
+        scm {
+          git {
+            remote {
+              url(cloudOpsForKubernetesRepoURL)
+              credentials(cloudOpsForKubernetesCredentialId)
             }
-            relativeTargetDirectory('cloudops-for-kubernetes')
-          }
-          branch('${cloudOpsForKubernetesBranch}')
-        }
-      }
-      lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/buildJobs/build-app/Jenkinsfile')
-    }
-  }
-  parameters {
-    stringParam('epAppInBuild', 'search','Which EP app to build')
-    stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
-    stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
-    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
-    stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to download and use. For EP Commerce 7.5 and 7.6 use 9.0.16.')
-    stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('deploymentPackageUrl', '', 'Build docker images with this deployment package. Optional, instead of building a deployment package with the Jenkins job use a package uploaded into a storage service.')
-  }
-}
-
-pipelineJob('build-batch') {
-  definition {
-    cpsScm {
-      scm {
-        git {
-          remote {
-            name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
-            credentials(cloudOpsForKubernetesCredentialId)
-          }
-          extensions {
-            cloneOptions {
-              shallow(true)
-              depth(10)
+            extensions {
+              cloneOptions {
+                shallow(true)
+                depth(10)
+              }
+              relativeTargetDirectory('cloudops-for-kubernetes')
             }
-            relativeTargetDirectory('cloudops-for-kubernetes')
+            branch('${cloudOpsForKubernetesBranch}')
           }
-          branch('${cloudOpsForKubernetesBranch}')
         }
+        lightweight(false)
+        scriptPath('cloudops-for-kubernetes/jenkins/jobs/docker-build-jobs/build-app/Jenkinsfile')
       }
-      lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/buildJobs/build-app/Jenkinsfile')
     }
-  }
-  parameters {
-    stringParam('epAppInBuild', 'batch','Which EP app to build')
-    stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
-    stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
-    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
-    stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to download and use. For EP Commerce 7.5 and 7.6 use 9.0.16.')
-    stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('deploymentPackageUrl', '', 'Build docker images with this deployment package. Optional, instead of building a deployment package with the Jenkins job use a package uploaded into a storage service.')
-  }
-}
-
-pipelineJob('build-integration') {
-  definition {
-    cpsScm {
-      scm {
-        git {
-          remote {
-            name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
-            credentials(cloudOpsForKubernetesCredentialId)
-          }
-          extensions {
-            cloneOptions {
-              shallow(true)
-              depth(10)
-            }
-            relativeTargetDirectory('cloudops-for-kubernetes')
-          }
-          branch('${cloudOpsForKubernetesBranch}')
-        }
-      }
-      lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/buildJobs/build-app/Jenkinsfile')
+    parameters {
+      stringParam('imageTag', tagSafeBranch, 'Value to tag the built Docker image')
+      stringParam('tomcatVersion', tomcatVersion, 'The Tomcat base image to use. For EP Commerce 7.5, 7.6 and 8.0 use 9.0.16.')
+      stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The CloudOps for Kubernetes branch to use for the Jenkinsfile.')
+      stringParam('dockerBranch', dockerDefaultBranch, 'The EP Docker branch to use for the Dockerfile.')
+      stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The EP Commerce branch. This is used to find the last successful build of the build-deployment-package job with the same value.')
+      stringParam('deploymentPackageUrl', '', '(Optional) Build Docker images with this deployment package instead of finding a deployment package based on the value of epCommerceBranch.')
+      stringParam('epAppInBuild', app,'The EP application to build')
     }
-  }
-  parameters {
-    stringParam('epAppInBuild', 'integration','Which EP app to build')
-    stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
-    stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
-    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
-    stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to download and use. For EP Commerce 7.5 and 7.6 use 9.0.16.')
-    stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('deploymentPackageUrl', '', 'Build docker images with this deployment package. Optional, instead of building a deployment package with the Jenkins job use a package uploaded into a storage service.')
-  }
-}
-
-pipelineJob('build-cm') {
-  definition {
-    cpsScm {
-      scm {
-        git {
-          remote {
-            name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
-            credentials(cloudOpsForKubernetesCredentialId)
-          }
-          extensions {
-            cloneOptions {
-              shallow(true)
-              depth(10)
-            }
-            relativeTargetDirectory('cloudops-for-kubernetes')
-          }
-          branch('${cloudOpsForKubernetesBranch}')
-        }
-      }
-      lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/buildJobs/build-app/Jenkinsfile')
-    }
-  }
-  parameters {
-    stringParam('epAppInBuild', 'cm','Which EP app to build')
-    stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
-    stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
-    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
-    stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to download and use. For EP Commerce 7.5 and 7.6 use 9.0.16.')
-    stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('deploymentPackageUrl', '', 'Build docker images with this deployment package. Optional, instead of building a deployment package with the Jenkins job use a package uploaded into a storage service.')
-  }
-}
-
-pipelineJob('build-data-sync') {
-  definition {
-    cpsScm {
-      scm {
-        git {
-          remote {
-            name('origin')
-            url('${cloudOpsForKubernetesRepoURL}')
-            credentials(cloudOpsForKubernetesCredentialId)
-          }
-          extensions {
-            cloneOptions {
-              shallow(true)
-              depth(10)
-            }
-            relativeTargetDirectory('cloudops-for-kubernetes')
-          }
-          branch('${cloudOpsForKubernetesBranch}')
-        }
-      }
-      lightweight(false)
-      scriptPath('cloudops-for-kubernetes/jenkins/jobs/buildJobs/build-app/Jenkinsfile')
-    }
-  }
-  parameters {
-    stringParam('epAppInBuild', 'data-sync','Which EP app to build')
-    stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
-    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
-    stringParam('dockerRepoURL', dockerRepoURL, 'The repo URL of the docker code.')
-    stringParam('dockerBranch', dockerDefaultBranch, 'The branch of docker to use.')
-    stringParam('dockerCredentialId', dockerCredentialId, 'The Jenkins credentials to use when checking out the EP docker code.')
-    stringParam('tomcatVersion', tomcatVersion, 'The version of Tomcat to download and use. For EP Commerce 7.5 and 7.6 use 9.0.16.')
-    stringParam('epCommerceRepoURL', epCommerceRepoURL, 'The repo URL of the ep-commerce code. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce. This is used to find the last successful build of the build-deployment-package job with the same value.')
-    stringParam('deploymentPackageUrl', '', 'Build docker images with this deployment package. Optional, instead of building a deployment package with the Jenkins job use a package uploaded into a storage service.')
   }
 }
 
@@ -858,7 +603,7 @@ pipelineJob('create-or-delete-mysql-container') {
     stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
     stringParam('serverName', '', 'The name of the server that is created. This name must be unique for all of the existing Azure Database for MySQL servers (regardless of if they were deployed by this Jenkins instance). This name must be provided later when running the data-pop-tool job and when doing deployments.')
     stringParam('kubernetesNamespace', '', 'The namespace in the Kubernetes cluster that the MySQL container will be deployed into. This namespace must match the namespace of the deployment of the EP stack.')
-    stringParam('imageTag', dockerDefaultBranch.replace('/','-'), 'The tag of the MySQL Docker image that will be deployed.')
+    stringParam('imageTag', tagSafeBranch, 'The tag of the MySQL Docker image that will be deployed.')
     stringParam('clusterName', kubernetesClusterName, 'The name of the Kubernetes cluster to deploy the mysql container into.')
   }
 }
@@ -894,7 +639,7 @@ pipelineJob('create-or-delete-activemq-container') {
     stringParam('serverName', '', 'The name of the server that is created.')
     stringParam('activeMQAllowedCIDR', '127.0.0.1/32', 'The network CIDR which are allowed to access the ActiveMQ service.')
     stringParam('kubernetesNamespace', '', 'The namespace in the Kubernetes cluster that the ActiveMQ container will be deployed into. This namespace must match the namespace of the deployment of the EP stack.')
-    stringParam('imageTag', dockerDefaultBranch.replace('/','-'), 'The tag of the ActiveMQ Docker image that will be deployed.')
+    stringParam('imageTag', tagSafeBranch, 'The tag of the ActiveMQ Docker image that will be deployed.')
     stringParam('dnsSubDomain', '', 'A subdomain that is prepended to the clusterName and dnsZoneName values below.\nex. dnsSubDomain=dev, clusterName=jDoeCluster, dnsZoneName=epcloud.mycompany.com results in the full DNS name of dev.jDoeCluster.epcloud.mycompany.com')
     stringParam('clusterName', kubernetesClusterName, 'The name of the Kubernetes cluster to deploy the ActiveMQ container into.')
     stringParam('dnsZoneName', rootDomainName, 'The `domainName` set in the docker-compose.yml file used during bootstrap. Can be overridden provided that DNS settings for the given domain has been manually configured.')
@@ -931,7 +676,7 @@ pipelineJob('deploy-or-delete-ep-stack') {
     stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The repo URL of the cloudops-for-kubernetes code.')
     stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
     stringParam('epEnvironment', defaultEpEnvironment, 'The Elastic Path Commerce environment configuration set to use.')
-    stringParam('dockerImageTag', dockerDefaultBranch.replace('/','-'), 'The image tag to use when deploying the ep-stack.')
+    stringParam('dockerImageTag', tagSafeBranch, 'The image tag to use when deploying the ep-stack.')
     stringParam('kubernetesNamespace','default','The namespace in the Kubernetes cluster that the ep-stack will be deployed into. This namespace must match the namespace of the deployment of the MySQL database')
     booleanParam('includeIngresses', false, 'Creates/Deletes Ingresses to allow connections from the allowedCIDRs.')
     stringParam('cmAllowedCIDR', '127.0.0.1/32', 'The network CIDR the Ingresses allow to access the cm app service. If `includeIngresses` is false this parameter can be ignored.')
@@ -994,7 +739,7 @@ pipelineJob('run-data-pop-tool') {
     stringParam('kubernetesNamespace', '', 'The Kubernetes namespace in which the database specified by serverName was created.\nThe job will run the data-pop-tool inside the same namespace.')
     stringParam('dataPopToolCommand', '', 'The data-pop-tool command to run on the database.\nMust be either reset-db or update-db.')
     stringParam('epEnvironment', defaultEpEnvironment, 'The name of the environment folder containing configuration specifying which EP data will be populated in database.\nMust be one of the environment folders in the deployment package with which the data-pop-tool was built.')
-    stringParam('imageTag', dockerDefaultBranch.replace('/','-'), 'The tag of the data-pop-tool image that will be used to populate the MySQL database.')
+    stringParam('imageTag', tagSafeBranch, 'The tag of the data-pop-tool image that will be used to populate the MySQL database.')
     stringParam('clusterName', kubernetesClusterName, 'The name of the kubernetes cluster where the mysql database is located.')
   }
 }
@@ -1034,85 +779,38 @@ pipelineJob('run-cortex-system-tests') {
   }
 }
 
-// since our test jobs share a lot of common configuration, the common config is included below while
-// the different config is stored in testJobsMap
-for(testJobsMapEntry in testJobsMap) {
-  def testJobName = testJobsMapEntry.key
-  def testJobConfigMap = testJobsMapEntry.value
-  def testJobParametersMap = testJobConfigMap.get("parameters")
-  pipelineJob("${testJobName}") {
-    definition {
-      cpsScm {
-        scm {
-          git {
-            remote {
-              url('${cloudOpsForKubernetesRepoURL}')
-              credentials('gitCredentialId')
-            }
-            extensions {
-              cloneOptions {
-                shallow(true)
-                depth(10)
-              }
-              relativeTargetDirectory('cloudops-for-kubernetes')
-            }
-            branch('${cloudOpsForKubernetesBranch}')
+pipelineJob('run-select-commerce-tests') {
+  definition {
+    cpsScm {
+      scm {
+        git {
+          remote {
+            name('origin')
+            url(cloudOpsForKubernetesRepoURL)
+            credentials(cloudOpsForKubernetesCredentialId)
           }
+          extensions {
+            cloneOptions {
+              shallow(true)
+              depth(10)
+            }
+            relativeTargetDirectory('cloudops-for-kubernetes')
+          }
+          branch('${cloudOpsForKubernetesBranch}')
         }
-        lightweight(false)
-        scriptPath('cloudops-for-kubernetes/jenkins/jobs/cloudops-for-kubernetes-ci/Jenkinsfile')
       }
-    }
-    parameters {
-      stringParam('kubernetesNamespace', 'default', 'Kubernetes namespace in which to deploy the pod which will bootstrap CloudOps for Kubernetes.')
-      booleanParam('cleanupResourceGroup', true, 'Clean up the resource group generated by this job.')
-      booleanParam('runCortexSystemTests', false, 'Run the Cortex system tests on the deployed ep-stacks.')
-      stringParam('resourceGroup', testJobParametersMap.get("resourceGroup"), '[Azure] For parameter details, see the CloudOps for Kubernetes docker-compose file.')
-      stringParam('kubernetesClusterName', testJobParametersMap.get("kubernetesClusterName"), 'For parameter details, see the CloudOps for Kubernetes docker-compose file.')
-      stringParam('region', 'us-west-2', '[AWS] The region of AWS account.')
-      stringParam('eksInstanceType', 'm5a.xlarge', '[AWS] For parameter details, see the CloudOps for Kubernetes docker-compose file.')
-      stringParam('eksNodeCount', '1', '[AWS] For parameter details, see the CloudOps for Kubernetes docker-compose file.')
-      stringParam('location', 'westus2', '[Azure] For parameter details, see the CloudOps for Kubernetes docker-compose file.')
-      stringParam('aksNodeVMSize', 'Standard_B4ms', '[Azure] For parameter details, see the CloudOps for Kubernetes docker-compose file.')
-      stringParam('aksNodeCount', '1', '[Azure] For parameter details, see the CloudOps for Kubernetes docker-compose file.')
-      stringParam('domainName', testJobParametersMap.get("domainName"), 'A subdomain of the domain name in zoneForNSRecord. For parameter details, see the CloudOps for Kubernetes docker-compose file.')
-      stringParam('zoneForNSRecord', "${cloud}.epcloudops.com", 'The name of the DNS Zone where name server records will be created to point to the DNS Zone created by the bootstrap process.')
-      stringParam('resourceGroupForParentZone', 'ImmortalResourceGroup', '[Azure] The Resource Group that zoneForNSRecord is a part of.')
-      credentialsParam('gitReposPrivateKey') {
-        type('com.cloudbees.jenkins.plugins.sshcredentials.impl.BasicSSHUserPrivateKey')
-        required()
-        defaultValue('gitCredentialId')
-        description('Private SSH key authorized to clone from repositories specified by cloudOpsForKubernetesRepoURL, epCommerceRepoURL and dockerRepoURL.')
-      }
-      stringParam('jenkinsIngressCIDR', '', 'A comma separated list of IPs that are allowed to access Jenkins. \nex. "1.2.3.4/32,2.3.4.5/32"')
-      stringParam('nexusIngressCIDR', '', 'A comma separated list of IPs that are allowed to access Nexus. \nex. "1.2.3.4/32,2.3.4.5/32"')
-      stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of CloudOps for Kubernetes to test.')
-      stringParam('cloudOpsForKubernetesRepoURL', cloudOpsForKubernetesRepoURL, 'The Git repo from which to pull CloudOps for Kubernetes code.')
-      stringParam('epCommerceBranch', testJobParametersMap.get("epCommerceBranch"), 'The branch of EP Commerce to test.')
-      stringParam('epCommerceRepoURL', testJobParametersMap.get("epCommerceRepoURL"), 'The Git repo from which to pull EP Commerce code.')
-      stringParam('dockerBranch', dockerDefaultBranch, 'The branch of EP docker to test.')
-      stringParam('dockerRepoURL', dockerRepoURL, 'The Git repo from which to pull EP docker code.')
-      stringParam('gitSSHHostKey', defaultGitServerHostKey, 'For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      stringParam('awsAccessKeyId', '', '[AWS] For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      simpleParam('hudson.model.PasswordParameterDefinition', 'awsSecretAccessKey', '', '[AWS] For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      stringParam('azureSubscriptionId', defaultAzureSubscriptionId, '[Azure] For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      stringParam('azureServicePrincipalTenantId', defaultAzureSpTenantId, '[Azure] For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      stringParam('azureServicePrincipalAppId', '', '[Azure] For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      simpleParam('hudson.model.PasswordParameterDefinition', 'azureServicePrincipalPassword', '', '[Azure] For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      stringParam('epRepositoryUser', defaultEpRepositoryUser, 'For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      simpleParam('hudson.model.PasswordParameterDefinition', 'epRepositoryPassword', defaultEpRepositoryPassword, 'For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      stringParam('epCortexMavenRepoUrl', testJobParametersMap.get("epCortexMavenRepoUrl"), 'For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      stringParam('epCommerceEngineMavenRepoUrl', testJobParametersMap.get("epCommerceEngineMavenRepoUrl"), 'For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      stringParam('epAcceleratorsMavenRepoUrl', testJobParametersMap.get("epAcceleratorsMavenRepoUrl"), 'For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      stringParam('oracleJdkDownloadUrl', defaultJdkDownloadUrl, 'For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      stringParam('jdkFolderName', defaultJdkFolderName, 'For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-      stringParam('tomcatVersion', tomcatVersion, 'For parameter details, see the CloudOps for Kubernetes docker-compose files.')
-    }
-    triggers {
-        cron(testJobConfigMap.get("build-schedule"))
+      lightweight(false)
+      scriptPath('cloudops-for-kubernetes/jenkins/jobs/run-select-commerce-tests/Jenkinsfile')
     }
   }
+  parameters {
+    stringParam('kubernetesNamespace', 'default', 'Kubernetes namespace in which the target EP stack is running.')
+    stringParam('SELECTED_TEST_STRING', '!commerce-engine/core/ep-core-itests,!extensions/cortex/system-tests/cucumber', 'The string value of the commerce tests to run.')
+    stringParam('cloudOpsForKubernetesBranch', cloudOpsForKubernetesDefaultBranch, 'The branch of cloudops-for-kubernetes to use.')
+    stringParam('epCommerceBranch', epCommerceDefaultBranch, 'The branch of ep-commerce to use.')
+  }
 }
+
 
 pipelineJob('create-additional-AKS-cluster') {
   definition {
@@ -1161,6 +859,7 @@ listView('Account Management') {
     name('register-external-activemq-service')
     name('create-or-delete-account-management-stack')
     name('deploy-account-management-pipeline')
+    name('create-database-and-user-in-external-database-instance')
   }
   columns {
     status()
@@ -1238,7 +937,6 @@ pipelineJob('build-docker-images-account-management') {
   }
 }
 
-
 pipelineJob('register-external-activemq-service') {
   definition {
     cpsScm {
@@ -1314,7 +1012,7 @@ pipelineJob('create-or-delete-account-management-stack') {
     stringParam('TF_VAR_oidc_discovery_url', '', '(Optional) The OpenID Connect discovery URL of an Identity Provider. Required if TF_VAR_include_keycloak is false.')
     stringParam('TF_VAR_oidc_client_id', '', '(Optional) The OpenID Connect client ID of an Identity Provider. Required if TF_VAR_include_keycloak is false.')
     nonStoredPasswordParam('TF_VAR_oidc_client_secret', '(Optional) The OpenID Connect client secret of an Identity Provider. Required if TF_VAR_include_keycloak is false.')
-    stringParam('TF_VAR_oidc_token_scope', '', '(Optional) The OpenID Connect token scope of an Identity Provider. Required if TF_VAR_include_keycloak is false.')
+    stringParam('TF_VAR_oidc_token_scope', '', '(Optional) The OpenID Connect token scope of an Identity Provider.')
     stringParam('TF_VAR_oidc_group_key', '', '(Optional) The OpenID Connect group key of an Identity Provider. Required if TF_VAR_include_keycloak is false.')
     stringParam('TF_VAR_oidc_group_value_for_associates', '', '(Optional) The OpenID Connect group value for Associate type Account Management users. Required if TF_VAR_include_keycloak is false.')
     stringParam('TF_VAR_oidc_group_value_for_seller_users', '', '(Optional) The OpenID Connect group value for Seller type Account Management users. Required if TF_VAR_include_keycloak is false.')
@@ -1408,5 +1106,46 @@ if(bootstrapExtrasPropertiesFile.exists()) {
         }
      }
      queue(extraBootstrapJobName)
+  }
+}
+
+pipelineJob('create-database-and-user-in-external-database-instance') {
+  definition {
+    cpsScm {
+      scm {
+        git {
+          remote {
+            name('origin')
+            url(cloudOpsForKubernetesRepoURL)
+            credentials(cloudOpsForKubernetesCredentialId)
+          }
+          extensions {
+            cloneOptions {
+              shallow(true)
+              depth(10)
+            }
+            relativeTargetDirectory('cloudops-for-kubernetes')
+          }
+          branch('${cloudops_for_kubernetes_branch}')
+        }
+      }
+      lightweight(false)
+      scriptPath('cloudops-for-kubernetes/jenkins/jobs/create-database-and-user-in-external-database-instance/Jenkinsfile')
+    }
+  }
+  parameters {
+    stringParam('target_subscription_id', defaultAzureSubscriptionId, '[Azure] The ID of the subscription group the external database is in. Defaults to the subscription ID CloudOps for Kubernetes was deployed in.')
+    stringParam('TF_VAR_target_resource_group', '', '[Azure] The name of the resource group the external database is in. Defaults to the resource group CloudOps for Kubernetes was deployed in.')
+    stringParam('TF_VAR_azure_location', '', '[Azure] The location of the external database.')
+    stringParam('TF_VAR_root_username', '', 'The root username of the external database instance. Can be found in the Kubernetes secret created by the job `create-or-delete-mysql-server` or in the CloudOps for AWS Consul config store.' )
+    simpleParam('hudson.model.PasswordParameterDefinition', 'TF_VAR_root_password', '', 'The root password of the external database instance. Can be found in the Kubernetes secret created by the job `create-or-delete-mysql-server` or in the CloudOps for AWS config store.')
+    stringParam('TF_VAR_database_hostname', '', 'The name of the server created by the job `create-or-delete-mysql-server` or the DB identifier of an RDS instance created by a CloudOps for AWS Author and Live environment.')
+    stringParam('TF_VAR_database_server_url', '', 'The endpoint of the server to connect to. Found in the web console of your cloud provider. An Amazon RDS endpoint would have the format `sample-database.cluster-asdf.us-west-2.rds.amazonaws.com`. An Azure MySQL server endpoint is the server name with the format `sample-database.azure.database.azure.com`.')
+    stringParam('TF_VAR_database_name', '', 'The name of the database. Will be created by this job if it does not exist or no value is provided.')
+    stringParam('TF_VAR_database_username', '', 'The username of the external database. Will be created by this job if it does not exist or no value is provided.')
+    simpleParam('hudson.model.PasswordParameterDefinition', 'TF_VAR_database_password', '', 'The password of the external database. Will be created by this job if it does not exist or no value is provided.')
+    stringParam('TF_VAR_kubernetes_namespace', '', 'The Kubernetes namespace in which to register the service. Access information will only be available in this namespace.')
+    stringParam('cluster_name', kubernetesClusterName, 'The Kubernetes cluster in which to register the service. Access information will only be available in this cluster.')
+    stringParam('cloudops_for_kubernetes_branch', cloudOpsForKubernetesDefaultBranch, 'The branch of CloudOps for Kubernetes to use.')
   }
 }

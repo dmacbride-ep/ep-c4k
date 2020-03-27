@@ -186,30 +186,6 @@ destroyTerraformBackend() {
   info "destroying the Terraform backend complete"
 }
 
-createEksctlConfig() {
-  info "determining which availability zones are available"
-
-  if [ "${TF_VAR_aws_region}" == "us-east-1" ]; then
-    availabilityZones=( us-east-1a us-east-1b )
-  else
-    availabilityZonesString=$(aws ec2 describe-availability-zones --region ${TF_VAR_aws_region}) \
-      || error "Failed to determine availability zones availible in this account"
-    parsedAvailabilityZonesString=$(echo ${availabilityZonesString} | jq '(.AvailabilityZones[0].ZoneName), (.AvailabilityZones[1].ZoneName), (.AvailabilityZones[2].ZoneName)' --raw-output) \
-      || error "failed to parse list of availability zones"
-    availabilityZones=( ${parsedAvailabilityZonesString} )
-  fi
-
-  [ ! -z "$availabilityZones" ] || error "set of available availability zones was empty"
-
-  # sourcing mo so array params can be detemplatized
-  . mo
-
-  info "detemplatizing eksctl config template"
-  mo --fail-not-set /root/bootstrap/eksctl.yaml.mo-template > /root/bootstrap/eksctl.yaml \
-    || error "could not detemplatize the eksctl.yaml file"
-}
-
-
 createEKSCluster() {
   info "creating the EKS cluster (if needed)"
 
@@ -234,7 +210,38 @@ createEKSCluster() {
       || error "could not create EKS cluster"
   fi
 
+  info "exporting terraform variables for cluster"
+  export TF_VAR_aws_kubernetes_cluster_vpc_id=$(eksctl get cluster \
+    --name ${TF_VAR_kubernetes_cluster_name} \
+    --region ${TF_VAR_aws_region} \
+    --timeout=10m \
+    --output json | jq '.[0].ResourcesVpcConfig.VpcId' --raw-output
+  ) || error "could not determine the vpc id for the cluster's vpc"
+
   info "done creating the EKS cluster (if needed)"
+}
+
+createEksctlConfig() {
+  info "determining which availability zones are available"
+
+  if [ "${TF_VAR_aws_region}" == "us-east-1" ]; then
+    availabilityZones=( us-east-1a us-east-1b )
+  else
+    availabilityZonesString=$(aws ec2 describe-availability-zones --region us-west-2) \
+      || error "Failed to determine availability zones availible in this account"
+    parsedAvailabilityZonesString=$(echo ${availabilityZonesString} | jq '(.AvailabilityZones[0].ZoneName), (.AvailabilityZones[1].ZoneName), (.AvailabilityZones[2].ZoneName)' --raw-output) \
+      || error "failed to parse list of availability zones"
+    availabilityZones=( ${parsedAvailabilityZonesString} )
+  fi
+
+  [ ! -z "$availabilityZones" ] || error "set of available availability zones was empty"
+
+  # sourcing mo so array params can be detemplatized
+  . mo
+
+  info "detemplatizing eksctl config template"
+  mo --fail-not-set /root/bootstrap/eksctl.yaml.mo-template > /root/bootstrap/eksctl.yaml \
+    || error "could not detemplatize the eksctl.yaml file"
 }
 
 deleteEKSCluster() {
@@ -248,11 +255,22 @@ deleteEKSCluster() {
     info "EKS cluster exists"
     mo --fail-not-set /root/bootstrap/eksctl.yaml.mo-template > /root/bootstrap/eksctl.yaml \
       || error "could not detemplatize the eksctl.yaml file"
-    eksctl delete cluster \
-      --wait \
-      --config-file=/root/bootstrap/eksctl.yaml \
-      --timeout=60m \
-      || error "failed to delete EKS cluster"
+    ## try to delete the eks cluster up to 5 times before failing
+    n=0
+    until [ $n -ge 5 ]
+    do
+      eksctl delete cluster \
+        --wait \
+        --config-file=/root/bootstrap/eksctl.yaml \
+        --timeout=60m \
+        && break
+      n=$((n+1))
+      sleep 3
+    done
+    if [ $n -eq 5 ]; then
+      error "failed to delete EKS cluster"
+    fi
+
   else
     info "EKS cluster doesn't exist"
   fi
@@ -381,6 +399,14 @@ cleanupResources() {
     error "Terraform workspaces other than bootstrap and default exist. Resources in these workspaces and the workspaces themselves will need to be removed and the Terraform state corrected before retrying. Workspaces: ${tfWorkspaceList}"
   fi
 
+  info "exporting terraform variables for cluster"
+  export TF_VAR_aws_kubernetes_cluster_vpc_id=$(eksctl get cluster \
+    --name ${TF_VAR_kubernetes_cluster_name} \
+    --region ${TF_VAR_aws_region} \
+    --timeout=10m \
+    --output json | jq '.[0].ResourcesVpcConfig.VpcId' --raw-output
+  ) || info "could not determine the vpc id for the cluster's vpc"
+
   # if the default workspace is not empty, fail
   # if there are resources in the default workspace, we don't know how they were created
   # as a result, we take a position of safety and don't delete anything else
@@ -422,9 +448,7 @@ cleanupResources() {
   info "done cleaning up resources"
 }
 
-createTerraformFiles() {
-  info "creating Terraform files"
-
+validateLocalCodeDir() {
   # make sure that the volume mapping was set
   [ -d "/localcode" ] || error "need to volume map local copy of cloudops-for-kubernetes code to /localcode"
 
@@ -432,6 +456,12 @@ createTerraformFiles() {
   for dirToCheck in bootstrap bootstrap/terraform bootstrap/terraform-backend terraform; do
     [ -d "/localcode/${dirToCheck}" ] || error "volume mapped directory does not contain ${dirToCheck} directory"
   done
+}
+
+createTerraformFiles() {
+  info "creating Terraform files"
+
+  validateLocalCodeDir
 
   # copy or generate backend config
   cp /root/bootstrap/terraform/backend.tf /localcode/bootstrap/terraform/backend.tf || \
@@ -481,6 +511,14 @@ ENDOFFILE
   info "done creating Terraform files"
 }
 
+showEksctlConfig() {
+  validateLocalCodeDir
+
+  createEksctlConfig
+
+  cp /root/bootstrap/eksctl.yaml /localcode/bootstrap/eksctl.yaml
+}
+
 setupNewCluster() {
   error "setupNewCluster has not been implemented yet"
 }
@@ -495,6 +533,13 @@ info "starting bootstrap"
 
 info "bootstrap mode is ${TF_VAR_bootstrap_mode}"
 
+loginToCloud
+
+if [[ "${TF_VAR_bootstrap_mode}" == "create-eksctl-config" ]]; then
+  showEksctlConfig
+  exit 0
+fi
+
 prepareSSHKey
 prepareTerraform
 
@@ -503,7 +548,6 @@ if [ "${TF_VAR_bootstrap_mode}" == "create-terraform-files" ]; then
   exit 0
 fi
 
-loginToCloud
 createTerraformBackend
 
 # begin setup/cleanup/show

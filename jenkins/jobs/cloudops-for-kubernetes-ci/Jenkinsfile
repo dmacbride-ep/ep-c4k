@@ -58,22 +58,19 @@ pipeline {
             def zoneName = "${params.domainName}".trim()
             def parentZoneName = "${params.zoneForNSRecord}".trim()
 
-            if(zoneName.equals("")) throw new Exception("domainName parameter must be non-empty")
-            if(parentZoneName.equals("")) throw new Exception("zoneForNSRecord parameter must be non-empty")
+            if(! params.domainName) throw new Exception("domainName parameter must be non-empty")
+            if(! parentZoneName) throw new Exception("zoneForNSRecord parameter must be non-empty")
             if(zoneName.indexOf(parentZoneName) == -1) throw new Exception("domainName must be a subdomain of resourceGroupForParentZone")
             if (cloud.equals("azure")) {
-              def resourceGroupForZone = "${params.resourceGroup}".trim()
-              def resourceGroupForParentZone = "${params.resourceGroupForParentZone}".trim()
+              if(! params.resourceGroup) throw new Exception("resourceGroup parameter must be non-empty")
+              if(! params.resourceGroupForParentZone) throw new Exception("resourceGroupForParentZone parameter must be non-empty")
 
-              if(resourceGroupForZone.equals("")) throw new Exception("resourceGroup parameter must be non-empty")
-              if(resourceGroupForParentZone.equals("")) throw new Exception("resourceGroupForParentZone parameter must be non-empty")
-
-              if("${params.azureServicePrincipalAppId}".trim().equals("")) throw new Exception("azureServicePrincipalAppId must be non-empty")
-              if("${params.azureServicePrincipalPassword}".trim().equals("")) throw new Exception("azureServicePrincipalPassword must be non-empty")
+              if(! params.azureServicePrincipalAppId) throw new Exception("azureServicePrincipalAppId must be non-empty")
+              if(! params.azureServicePrincipalPassword) throw new Exception("azureServicePrincipalPassword must be non-empty")
 
             } else if (cloud.equals("aws")) {
-              if("${params.awsAccessKeyId}".trim().equals("")) throw new Exception("awsAccessKeyId must be non-empty")
-              if("${params.awsSecretAccessKey}".trim().equals("")) throw new Exception("awsSecretAccessKey must be non-empty")
+              if(! params.awsAccessKeyId) throw new Exception("awsAccessKeyId must be non-empty")
+              if(! params.awsSecretAccessKey) throw new Exception("awsSecretAccessKey must be non-empty")
             }
           }
         }
@@ -481,7 +478,9 @@ pipeline {
           steps {
             container('docker1') {
               script {
-                runRemoteJob("build-deployment-package", "")
+                retry(2){
+                  runRemoteJob("build-deployment-package", "")
+                }
               }
             }
           }
@@ -493,7 +492,7 @@ pipeline {
         container('docker1') {
           script {
             runRemoteJob("build-core-images", "")
-            runRemoteJob("build-app-images", "")
+            runRemoteJob("build-commerce-images", "")
           }
         }
       }
@@ -581,7 +580,9 @@ pipeline {
           steps {
             container('docker1') {
               script {
-                runRemoteJob("run-data-pop-tool", "serverName=${mysqlContainerServerName}\njmsServerName=${activeMQContainerServerName2}\nkubernetesNamespace=default\ndataPopToolCommand=reset-db")
+                retry(2){
+                  runRemoteJob("run-data-pop-tool", "serverName=${mysqlContainerServerName}\njmsServerName=${activeMQContainerServerName2}\nkubernetesNamespace=default\ndataPopToolCommand=reset-db")
+                }
               }
             }
           }
@@ -663,7 +664,7 @@ pipeline {
         }
       }
     }
-    stage('Parallel Stage: Delete ActiveMQ pods and MySQL instances') {
+    stage('Parallel Stage: Delete ActiveMQ pod for MySQL server and MySQL container') {
       when {
         expression { params.cleanupResourceGroup == true }
       }
@@ -680,22 +681,29 @@ pipeline {
             }
           }
         }
-        stage('Delete ActiveMQ for MySQL container') {
-          agent { kubernetes { label "${randomLabel}-2"; defaultContainer "jnlp"; yaml "${podYaml}" } }
-          steps {
-            container('docker1') {
-              script {
-                runRemoteJob("create-or-delete-activemq-container", "serverName=${activeMQContainerServerName2}\nkubernetesNamespace=default\nimageTag=${dockerImageTag}\ndnsSubDomain=cicontainer\ndeleteContainer=true")
-              }
-            }
-          }
-        }
         stage('Delete MySQL container') {
           agent { kubernetes { label "${randomLabel}-3"; defaultContainer "jnlp"; yaml "${podYaml}" } }
           steps {
             container('docker1') {
               script {
                 runRemoteJob("create-or-delete-mysql-container", "serverName=${mysqlContainerServerName}\nkubernetesNamespace=default\nimageTag=${dockerImageTag}\ndeleteContainer=true")
+              }
+            }
+          }
+        }
+      }
+    }
+    stage('Parallel Stage: Delete ActiveMQ pod for MySQL container and MySQL server') {
+      when {
+        expression { params.cleanupResourceGroup == true }
+      }
+      parallel {
+        stage('Delete ActiveMQ for MySQL container') {
+          agent { kubernetes { label "${randomLabel}-2"; defaultContainer "jnlp"; yaml "${podYaml}" } }
+          steps {
+            container('docker1') {
+              script {
+                runRemoteJob("create-or-delete-activemq-container", "serverName=${activeMQContainerServerName2}\nkubernetesNamespace=default\nimageTag=${dockerImageTag}\ndnsSubDomain=cicontainer\ndeleteContainer=true")
               }
             }
           }

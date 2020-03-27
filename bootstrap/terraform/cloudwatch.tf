@@ -1,5 +1,5 @@
 resource "kubernetes_namespace" "cloudwatch-namespace" {
-  count = (var.cloud == "aws") && (terraform.workspace == "bootstrap") ? 1 : 0
+  count = (var.cloud == "aws") && (terraform.workspace == "bootstrap") && (var.aws_enable_cloudwatch_logging) ? 1 : 0
 
   metadata {
     labels = {
@@ -14,7 +14,7 @@ resource "kubernetes_namespace" "cloudwatch-namespace" {
 }
 
 resource "kubernetes_config_map" "cluster-info-config-map" {
-  count      = (var.cloud == "aws") && (terraform.workspace == "bootstrap") ? 1 : 0
+  count      = (var.cloud == "aws") && (terraform.workspace == "bootstrap") && (var.aws_enable_cloudwatch_logging) ? 1 : 0
   depends_on = [kubernetes_namespace.cloudwatch-namespace]
 
   metadata {
@@ -28,7 +28,7 @@ resource "kubernetes_config_map" "cluster-info-config-map" {
 }
 
 resource "kubernetes_service_account" "fluentd" {
-  count      = (var.cloud == "aws") && (terraform.workspace == "bootstrap") ? 1 : 0
+  count      = (var.cloud == "aws") && (terraform.workspace == "bootstrap") && (var.aws_enable_cloudwatch_logging) ? 1 : 0
   depends_on = [kubernetes_namespace.cloudwatch-namespace]
 
   metadata {
@@ -38,7 +38,7 @@ resource "kubernetes_service_account" "fluentd" {
 }
 
 resource "kubernetes_cluster_role" "fluentd-role" {
-  count = (var.cloud == "aws") && (terraform.workspace == "bootstrap") ? 1 : 0
+  count = (var.cloud == "aws") && (terraform.workspace == "bootstrap") && (var.aws_enable_cloudwatch_logging) ? 1 : 0
 
   metadata {
     name = "fluentd-role"
@@ -51,7 +51,7 @@ resource "kubernetes_cluster_role" "fluentd-role" {
 }
 
 resource "kubernetes_cluster_role_binding" "fluentd-role-binding" {
-  count      = (var.cloud == "aws") && (terraform.workspace == "bootstrap") ? 1 : 0
+  count      = (var.cloud == "aws") && (terraform.workspace == "bootstrap") && (var.aws_enable_cloudwatch_logging) ? 1 : 0
   depends_on = [kubernetes_service_account.fluentd, kubernetes_cluster_role.fluentd-role]
 
   metadata {
@@ -70,7 +70,7 @@ resource "kubernetes_cluster_role_binding" "fluentd-role-binding" {
 }
 
 resource "kubernetes_config_map" "fluentd-config" {
-  count      = (var.cloud == "aws") && (terraform.workspace == "bootstrap") ? 1 : 0
+  count      = (var.cloud == "aws") && (terraform.workspace == "bootstrap") && (var.aws_enable_cloudwatch_logging) ? 1 : 0
   depends_on = [kubernetes_namespace.cloudwatch-namespace]
 
   metadata {
@@ -121,40 +121,6 @@ EOF
     time_format %Y-%m-%dT%H:%M:%S.%NZ
   </parse>
 </source>
-
-<source>
-  @type tail
-  @id in_tail_fluentd_logs
-  @label @fluentdlogs
-  path /var/log/containers/fluentd*
-  pos_file /var/log/fluentd.log.pos
-  tag *
-  read_from_head true
-  <parse>
-    @type json
-    time_format %Y-%m-%dT%H:%M:%S.%NZ
-  </parse>
-</source>
-
-<label @fluentdlogs>
-  <filter **>
-    @type kubernetes_metadata
-    @id filter_kube_metadata_fluentd
-  </filter>
-
-  <filter **>
-    @type record_transformer
-    @id filter_fluentd_stream_transformer
-    <record>
-      stream_name $${tag_parts[3]}
-    </record>
-  </filter>
-
-  <match **>
-    @type relabel
-    @label @NORMAL
-  </match>
-</label>
 
 <label @containers>
   <filter **>
@@ -383,7 +349,7 @@ EOF
 }
 
 resource "kubernetes_daemonset" "fluentd-cloudwatch" {
-  count      = (var.cloud == "aws") && (terraform.workspace == "bootstrap") ? 1 : 0
+  count      = (var.cloud == "aws") && (terraform.workspace == "bootstrap") && (var.aws_enable_cloudwatch_logging) ? 1 : 0
   depends_on = [kubernetes_config_map.cluster-info-config-map, kubernetes_cluster_role_binding.fluentd-role-binding, kubernetes_config_map.fluentd-config]
 
   metadata {
@@ -411,7 +377,7 @@ resource "kubernetes_daemonset" "fluentd-cloudwatch" {
         automount_service_account_token  = true
 
         container {
-          image = "fluent/fluentd-kubernetes-daemonset:v1.8.1-debian-cloudwatch-1.0"
+          image = "fluent/fluentd-kubernetes-daemonset:v1.8.1-debian-cloudwatch-1.1"
           name  = "fluentd-cloudwatch"
 
           env {

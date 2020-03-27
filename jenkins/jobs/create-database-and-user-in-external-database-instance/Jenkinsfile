@@ -1,0 +1,155 @@
+// this bit is just plain Jenkins Groovy
+def secretsDirectory = new File("/secret/jenkins-secrets").exists() ? new File("/secret/jenkins-secrets") : new File("/var/jenkins_secrets");
+def randomLabel = "jenkins-worker-${UUID.randomUUID().toString()}"
+def cloud = new File(secretsDirectory, "cloud").text.trim();
+
+def defaultAzureSubscriptionId = ""
+def defaultResourceGroup = ""
+if (cloud.equals("azure")) {
+  defaultAzureSubscriptionId = new File(secretsDirectory, "azureSubscriptionId").text.trim();
+  defaultResourceGroup = new File(secretsDirectory, "resourceGroupName").text.trim();
+}
+
+// define the build agent
+def dockerRegistryAddress = new File(secretsDirectory, "dockerRegistryAddress").text.trim();
+def jenkinsAgentImageTag = new File(secretsDirectory, "cloudOpsForKubernetesDefaultBranch").text.trim().replace('/','-');
+def podYamlFromFile = new File("${env.JENKINS_HOME}/workspace/create-database-and-user-in-external-database-instance@script/cloudops-for-kubernetes/jenkins/agents/kubernetes/docker-1gb-0.25core-1container.yaml").text.trim();
+String podYaml = podYamlFromFile.replace('${dockerRegistryAddress}', "${dockerRegistryAddress}").replace('${jenkinsAgentImageTag}', "${jenkinsAgentImageTag}")
+
+// this is the Pipeline DSL.
+// Syntax here: https://jenkins.io/doc/book/pipeline/syntax/
+// More useful docs: https://jenkins.io/doc/pipeline/steps/
+pipeline {
+  agent {
+    kubernetes {
+      label "docker-${randomLabel}"
+      defaultContainer "jnlp"
+      yaml "${podYaml}"
+    }
+  }
+  environment {
+    TF_IN_AUTOMATION = "true"
+    TF_CLI_ARGS = "-no-color"
+    TF_CLI_ARGS_apply = "-input=false"
+    TF_CLI_ARGS_destroy = "-input=false"
+    TF_CLI_ARGS_plan = "-input=false"
+  }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10000'))
+    timeout(time: 40, unit: 'MINUTES')
+  }
+  stages {
+    stage('Validate job parameters') {
+      steps {
+        container('docker1') {
+          script {
+            if ( ! "${params.TF_VAR_root_username}".trim()) {
+              error "TF_VAR_root_username must be set"
+            }
+            if ( ! "${params.TF_VAR_root_password}".trim()) {
+              error "TF_VAR_root_password must be set"
+            }
+            if ( ! "${params.TF_VAR_database_hostname}".trim()) {
+              error "TF_VAR_database_hostname must be set"
+            }
+            if ( ! "${params.TF_VAR_database_server_url}".trim()) {
+              error "TF_VAR_database_server_url must be set"
+            }
+            if ( ! "${params.TF_VAR_kubernetes_namespace}".trim()) {
+              error "TF_VAR_kubernetes_namespace must be set"
+            }
+            if ( ! "${params.cluster_name}".trim()) {
+              error "cluster_name must be set"
+            }
+            if (cloud.equals("azure")) {
+              if ( ! "${params.TF_VAR_target_resource_group}".trim()) {
+                params.TF_VAR_target_resource_group = defaultResourceGroup
+                println "set target database resource group to "+defaultResourceGroup
+              }
+              if ( ! "${params.target_subscription_id}".trim()) {
+                params.target_subscription_id = defaultAzureSubscriptionId
+                println "set target database subscription id to "+defaultAzureSubscriptionId
+              }
+              if ( ! "${params.TF_VAR_azure_location}".trim()) {
+                error "TF_VAR_azure_location must be set"
+              }
+            }
+            if ( ! ("${params.TF_VAR_database_name}" ==~ "^\$|^[a-z0-9]([-a-z0-9]*[a-z0-9])\$")) {
+                error "TF_VAR_database_name must be lower case alphanumeric characters or '-' and must start and end with an alphanumeric character"
+            }
+          }
+        }
+      }
+    }
+    stage('Set Database and Resource values') {
+      steps {
+        container('docker1') {
+          script {
+            if (cloud.equals("azure")) {
+              terraformResource="azurerm_mysql_server.external-azure-server[0]"
+              resourceID="/subscriptions/${params.target_subscription_id}/resourceGroups/${params.TF_VAR_target_resource_group}/providers/Microsoft.DBforMySQL/servers/${params.TF_VAR_database_hostname}"
+            } else {
+              terraformResource="aws_rds_cluster.external-aws-database[0]"
+              resourceID="${params.TF_VAR_database_hostname}"
+            }
+          }
+        }
+      }
+    }
+    stage('Configure Terraform backend') {
+      steps {
+        container('docker1') {
+          dir("cloudops-for-kubernetes/terraform/external-database-instance") {
+            script {
+              eplib = load "${WORKSPACE}/cloudops-for-kubernetes/lib/eplib.groovy"
+
+              eplib.loginToCloud()
+              eplib.loginToKubernetesCluster("${params.cluster_name}")
+              eplib.loginToTerraform()
+              terraformWorkspaceName = eplib.generateTerraformWorkspaceName("${params.cluster_name}", "${params.TF_VAR_kubernetes_namespace}", "database", "${params.TF_VAR_database_hostname}")
+              eplib.createTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.TF_VAR_kubernetes_namespace}")
+            }
+          }
+        }
+      }
+    }
+    stage('Import external database instance to Terraform') {
+      steps {
+        container('docker1') {
+          dir("cloudops-for-kubernetes/terraform/external-database-instance") {
+            script {
+              // run Terraform
+              labelledShell label: 'Import database instance to Terraform', script: """
+                terraform init -get-plugins=false
+                terraform workspace select ${terraformWorkspaceName}
+
+                if terraform state show ${terraformResource}; then
+                  echo "external database has already been imported, nothing to do"
+                else
+                  terraform import ${terraformResource} ${resourceID}
+                  terraform show
+                fi
+              """
+            }
+          }
+        }
+      }
+    }
+    stage('Create Kubernetes Secret for the External Database') {
+      steps {
+        container('docker1') {
+          dir("cloudops-for-kubernetes/terraform/external-database-instance") {
+            script {
+              labelledShell label: 'Create Kubernetes secret for the external database', script: """
+                terraform init -get-plugins=false
+                terraform workspace select ${terraformWorkspaceName}
+
+                terraform apply -auto-approve -parallelism=50
+              """
+            }
+          }
+        }
+      }
+    }
+  }
+}

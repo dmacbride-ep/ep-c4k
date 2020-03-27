@@ -26,6 +26,10 @@ pipeline {
   environment {
     fullDomainName = "${params.dnsSubDomain}.${params.clusterName}.${params.dnsZoneName}"
     TF_IN_AUTOMATION = "true"
+    TF_CLI_ARGS = "-no-color"
+    TF_CLI_ARGS_apply = "-input=false"
+    TF_CLI_ARGS_destroy = "-input=false"
+    TF_CLI_ARGS_plan = "-input=false"
   }
   stages {
     stage('Check job parameters') {
@@ -35,20 +39,20 @@ pipeline {
             if ( ! ("${params.kubernetesNamespace}" ==~ "^[a-z0-9]([-a-z0-9]*[a-z0-9])\$")) {
               error "namespace parameter must be lower case alphanumeric characters or '-' and must start and end with an alphanumeric character"
             }
-            if ( ! ("${params.cmAllowedCIDR}" ==~ "^\\s*\$|^([0-9]{1,3}.){3}[0-9]{1,3}/32(,\\s([0-9]{1,3}.){3}[0-9]{1,3}/32)*\$")) {
-              error "cmAllowedCIDR parameter must be a comma separated network CIDR (for example: 5.6.7.8/32)"
+            if ( ! ("${params.cmAllowedCIDR}" ==~ "^([0-9]{1,3}.){3}[0-9]{1,3}/32(,\\s?([0-9]{1,3}.){3}[0-9]{1,3}/32)*\$")) {
+              error "cmAllowedCIDR parameter must be a comma separated network CIDR (for example: 1.2.3.4/32,5.6.7.8/32)"
             }
-            if ( ! ("${params.integrationAllowedCIDR}" ==~ "^\\s*\$|^([0-9]{1,3}.){3}[0-9]{1,3}/32(,\\s([0-9]{1,3}.){3}[0-9]{1,3}/32)*\$")) {
-              error "integrationAllowedCIDR parameter must be a comma separated network CIDR (for example: 5.6.7.8/32)"
+            if ( ! ("${params.integrationAllowedCIDR}" ==~ "^([0-9]{1,3}.){3}[0-9]{1,3}/32(,\\s?([0-9]{1,3}.){3}[0-9]{1,3}/32)*\$")) {
+              error "integrationAllowedCIDR parameter must be a comma separated network CIDR (for example: 1.2.3.4/32,5.6.7.8/32)"
             }
-            if ( ! ("${params.cortexAllowedCIDR}" ==~ "^\\s*\$|^([0-9]{1,3}.){3}[0-9]{1,3}/32(,\\s([0-9]{1,3}.){3}[0-9]{1,3}/32)*\$")) {
-              error "cortexAllowedCIDR parameter must be a comma separated network CIDR (for example: 5.6.7.8/32)"
+            if ( ! ("${params.cortexAllowedCIDR}" ==~ "^([0-9]{1,3}.){3}[0-9]{1,3}/32(,\\s?([0-9]{1,3}.){3}[0-9]{1,3}/32)*\$")) {
+              error "cortexAllowedCIDR parameter must be a comma separated network CIDR (for example: 1.2.3.4/32,5.6.7.8/32)"
             }
-            if ( ! ("${params.studioAllowedCIDR}" ==~ "^\\s*\$|^([0-9]{1,3}.){3}[0-9]{1,3}/32(,\\s([0-9]{1,3}.){3}[0-9]{1,3}/32)*\$")) {
-              error "studioAllowedCIDR parameter must be a comma separated network CIDR (for example: 5.6.7.8/32)"
+            if ( ! ("${params.studioAllowedCIDR}" ==~ "^([0-9]{1,3}.){3}[0-9]{1,3}/32(,\\s?([0-9]{1,3}.){3}[0-9]{1,3}/32)*\$")) {
+              error "studioAllowedCIDR parameter must be a comma separated network CIDR (for example: 1.2.3.4/32,5.6.7.8/32)"
             }
-            if ( ! ("${params.infoPageAllowedCIDR}" ==~ "^\\s*\$|^([0-9]{1,3}.){3}[0-9]{1,3}/32(,\\s([0-9]{1,3}.){3}[0-9]{1,3}/32)*\$")) {
-              error "infoPageAllowedCIDR parameter must be a comma separated network CIDR (for example: 5.6.7.8/32)"
+            if ( ! ("${params.infoPageAllowedCIDR}" ==~ "^([0-9]{1,3}.){3}[0-9]{1,3}/32(,\\s?([0-9]{1,3}.){3}[0-9]{1,3}/32)*\$")) {
+              error "infoPageAllowedCIDR parameter must be a comma separated network CIDR (for example: 1.2.3.4/32,5.6.7.8/32)"
             }
             if ("${params.dockerImageTag}" ==~ "^[aA-zZ0-9]+/[aA-zZ0-9]*\$") {
               error "docker image tags cannot have '/' in the middle or end"
@@ -86,14 +90,16 @@ pipeline {
     stage('Preparation Stage') {
       steps {
         container('docker1') {
-          script {
-            eplib = load "cloudops-for-kubernetes/lib/eplib.groovy"
-            eplib.loginToCloud()
-            eplib.loginToKubernetesCluster("${params.clusterName}")
-            eplib.loginToTerraform()
+          dir("cloudops-for-kubernetes/terraform/ep-stack") {
+            script {
+              eplib = load "${WORKSPACE}/cloudops-for-kubernetes/lib/eplib.groovy"
+              eplib.loginToCloud()
+              eplib.loginToKubernetesCluster("${params.clusterName}")
+              eplib.loginToTerraform()
 
-            terraformWorkspaceName = eplib.generateTerraformWorkspaceName("${params.clusterName}", "${params.kubernetesNamespace}", "ep-stack")
-            eplib.createTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.kubernetesNamespace}")
+              terraformWorkspaceName = eplib.generateTerraformWorkspaceName("${params.clusterName}", "${params.kubernetesNamespace}", "ep-stack")
+              eplib.createTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.kubernetesNamespace}")
+            }
           }
         }
       }
@@ -101,66 +107,67 @@ pipeline {
     stage('Create/delete the EP stack and selection options') {
       steps {
         container('docker1') {
-          script {
-            String terraformOperation = null
-            if(params.deleteStack) {
-              terraformOperation = "destroy"
-            } else {
-              terraformOperation = "apply"
+          dir("cloudops-for-kubernetes/terraform/ep-stack") {
+            script {
+              String terraformOperation = null
+              if(params.deleteStack) {
+                terraformOperation = "destroy"
+              } else {
+                terraformOperation = "apply"
+              }
+              labelledShell label: 'Run Terraform', script: """#!/bin/bash
+                terraform init -get-plugins=false
+                terraform workspace select ${terraformWorkspaceName}
+
+                # EP stack ConfigMap, Deployments, and Services
+                export TF_VAR_docker_image_tag="${params.dockerImageTag}"
+                export TF_VAR_enable_debug="${params.enableDebug}"
+                export TF_VAR_enable_jmx="${params.enableJmx}"
+                export TF_VAR_database_name="${params.dbServerName}"
+                export TF_VAR_ep_resourcing_profile="${params.epStackResourcingProfile}"
+                export TF_VAR_ep_smtp_host="${params.smtpHost}"
+                export TF_VAR_ep_smtp_port="${params.smtpPort}"
+                export TF_VAR_ep_smtp_scheme="${params.smtpScheme}"
+                export TF_VAR_ep_smtp_user="${params.smtpUser}"
+                export TF_VAR_ep_smtp_pass="${params.smtpPass}"
+                export TF_VAR_ep_tests_enable_ui="${params.enableUITests}"
+                export TF_VAR_ep_changesets_enabled="${params.epChangesetsEnabled}"
+                export TF_VAR_ep_commerce_envname="${params.epEnvironment}"
+                export TF_VAR_ep_x_jvm_args=""
+                export TF_VAR_jms_name="${params.jmsServerName}"
+                export TF_VAR_jmx_auth="${params.enableJmxAuth}"
+                export TF_VAR_kubernetes_namespace="${params.kubernetesNamespace}"
+                export TF_VAR_namespace="/ep"
+                export TF_VAR_registry_address="${dockerRegistryAddress}"
+
+                # Data Sync Tool
+                export TF_VAR_deploy_dst_webapp="${params.deployDstWebapp}"
+                export TF_VAR_target_jms_name="${params.targetJMSServerName}"
+                export TF_VAR_target_namespace="${params.targetNamespace}"
+
+                # Target Database Secret
+                export TF_VAR_target_database_name="${params.targetDBServerName}"
+
+                # Info Page
+                export TF_VAR_cluster_name="${params.clusterName}"
+                export TF_VAR_dns_sub_domain="${params.dnsSubDomain}"
+                export TF_VAR_full_domain_name="${fullDomainName}"
+                export TF_VAR_include_deployment_info_page="${params.includeDeploymentInfoPage}"
+                export TF_VAR_info_page_allowed_cidr="${params.infoPageAllowedCIDR}"
+
+                # Horizontal Pod Autoscalers
+                export TF_VAR_include_horizontal_pod_autoscalers="${params.includeHorizontalPodAutoscalers}"
+
+                # Ingresses
+                export TF_VAR_include_ingresses="${params.includeIngresses}"
+                export TF_VAR_cm_allowed_cidr="${params.cmAllowedCIDR}"
+                export TF_VAR_integration_allowed_cidr="${params.integrationAllowedCIDR}"
+                export TF_VAR_cortex_allowed_cidr="${params.cortexAllowedCIDR}"
+                export TF_VAR_studio_allowed_cidr="${params.studioAllowedCIDR}"
+
+                terraform ${terraformOperation} -parallelism=50 -auto-approve
+              """
             }
-            labelledShell label: 'Run Terraform', script: """#!/bin/bash
-              cd "${WORKSPACE}/cloudops-for-kubernetes/terraform/ep-stack"
-              terraform init -get-plugins=false
-              terraform workspace select ${terraformWorkspaceName}
-
-              # EP stack ConfigMap, Deployments, and Services
-              export TF_VAR_docker_image_tag="${params.dockerImageTag}"
-              export TF_VAR_enable_debug="${params.enableDebug}"
-              export TF_VAR_enable_jmx="${params.enableJmx}"
-              export TF_VAR_database_name="${params.dbServerName}"
-              export TF_VAR_ep_resourcing_profile="${params.epStackResourcingProfile}"
-              export TF_VAR_ep_smtp_host="${params.smtpHost}"
-              export TF_VAR_ep_smtp_port="${params.smtpPort}"
-              export TF_VAR_ep_smtp_scheme="${params.smtpScheme}"
-              export TF_VAR_ep_smtp_user="${params.smtpUser}"
-              export TF_VAR_ep_smtp_pass="${params.smtpPass}"
-              export TF_VAR_ep_tests_enable_ui="${params.enableUITests}"
-              export TF_VAR_ep_changesets_enabled="${params.epChangesetsEnabled}"
-              export TF_VAR_ep_commerce_envname="${params.epEnvironment}"
-              export TF_VAR_ep_x_jvm_args=""
-              export TF_VAR_jms_name="${params.jmsServerName}"
-              export TF_VAR_jmx_auth="${params.enableJmxAuth}"
-              export TF_VAR_kubernetes_namespace="${params.kubernetesNamespace}"
-              export TF_VAR_namespace="/ep"
-              export TF_VAR_registry_address="${dockerRegistryAddress}"
-
-              # Data Sync Tool
-              export TF_VAR_deploy_dst_webapp="${params.deployDstWebapp}"
-              export TF_VAR_target_jms_name="${params.targetJMSServerName}"
-              export TF_VAR_target_namespace="${params.targetNamespace}"
-
-              # Target Database Secret
-              export TF_VAR_target_database_name="${params.targetDBServerName}"
-
-              # Info Page
-              export TF_VAR_cluster_name="${params.clusterName}"
-              export TF_VAR_dns_sub_domain="${params.dnsSubDomain}"
-              export TF_VAR_full_domain_name="${fullDomainName}"
-              export TF_VAR_include_deployment_info_page="${params.includeDeploymentInfoPage}"
-              export TF_VAR_info_page_allowed_cidr="${params.infoPageAllowedCIDR}"
-
-              # Horizontal Pod Autoscalers
-              export TF_VAR_include_horizontal_pod_autoscalers="${params.includeHorizontalPodAutoscalers}"
-
-              # Ingresses
-              export TF_VAR_include_ingresses="${params.includeIngresses}"
-              export TF_VAR_cm_allowed_cidr="${params.cmAllowedCIDR}"
-              export TF_VAR_integration_allowed_cidr="${params.integrationAllowedCIDR}"
-              export TF_VAR_cortex_allowed_cidr="${params.cortexAllowedCIDR}"
-              export TF_VAR_studio_allowed_cidr="${params.studioAllowedCIDR}"
-
-              terraform ${terraformOperation} -var-file=credentials.tfvars -parallelism=50 -auto-approve -no-color -input=false
-            """
           }
         }
       }
@@ -168,8 +175,10 @@ pipeline {
     stage('Clean-up Stage') {
       steps {
         container('docker1') {
-          script {
-            eplib.deleteTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.kubernetesNamespace}")
+          dir("cloudops-for-kubernetes/terraform/ep-stack") {
+            script {
+              eplib.deleteTerraformWorkspaceAndKubernetesNamespace(terraformWorkspaceName, "${params.kubernetesNamespace}")
+            }
           }
         }
       }

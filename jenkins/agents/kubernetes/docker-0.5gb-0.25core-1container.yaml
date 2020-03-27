@@ -16,6 +16,8 @@ spec:
     command:
     - cat
     tty: true
+    securityContext:
+      privileged: true
     resources:
       requests:
         memory: "512Mi"

@@ -57,6 +57,13 @@ resource "kubernetes_deployment" "ep_nexus_deployment" {
     }
   }
   spec {
+    strategy {
+      type = "RollingUpdate"
+      rolling_update {
+        max_unavailable = 1
+        max_surge       = 0
+      }
+    }
     replicas = 1
     selector {
       match_labels = {
@@ -163,11 +170,11 @@ resource "kubernetes_deployment" "ep_nexus_deployment" {
             name = "single-request-reopen"
           }
           option {
-            name = "timeout"
+            name  = "timeout"
             value = 3
           }
           option {
-            name = "attempts"
+            name  = "attempts"
             value = 3
           }
         }
@@ -214,7 +221,7 @@ resource "kubernetes_service" "ep_nexus_service" {
 }
 
 resource "kubernetes_ingress" "ep_nexus_ingress" {
-  count      = terraform.workspace == "bootstrap" ? 1 : 0
+  count = terraform.workspace == "bootstrap" ? 1 : 0
 
   metadata {
     name      = "ep-nexus-ingress"
