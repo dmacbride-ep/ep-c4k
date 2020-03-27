@@ -82,15 +82,7 @@ RUN ./aws/install
 
 # install the Azure CLI
 # this follows Microsoft's docs from https://docs.microsoft.com/en-us/cli/azure/install-azure-cli-apt
-RUN apt-get update && \
-    apt-get install -y apt-transport-https lsb-release software-properties-common dirmngr && \
-    echo "deb [arch=amd64] https://packages.microsoft.com/repos/azure-cli/ $(lsb_release -cs) main" | \
-    tee /etc/apt/sources.list.d/azure-cli.list && \
-    apt-key --keyring /etc/apt/trusted.gpg.d/Microsoft.gpg adv --keyserver packages.microsoft.com \
-      --recv-keys BC528686B50D79E339D3721CEB3E94ADBE1229CF && \
-    apt-get update && \
-    apt-get install -y azure-cli && \
-    apt-get clean all
+RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
 # install the aks-preview extension
 # this is required to set IP CIDRs on the Kubernetes API

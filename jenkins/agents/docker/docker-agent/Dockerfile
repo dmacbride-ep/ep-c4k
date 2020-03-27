@@ -101,14 +101,7 @@ RUN curl -o aws-iam-authenticator "${AWS_IAM_AUTHENTICATOR_URL}" && \
     mv ./aws-iam-authenticator /usr/local/bin/
 
 # install the Azure CLI
-RUN apt-get install apt-transport-https lsb-release software-properties-common dirmngr -y && \
-    echo "deb [arch=amd64] https://packages.microsoft.com/repos/azure-cli/ $(lsb_release -cs) main" > /etc/apt/sources.list.d/azure-cli.list && \
-    apt-key --keyring /etc/apt/trusted.gpg.d/Microsoft.gpg adv \
-      --keyserver packages.microsoft.com \
-      --recv-keys BC528686B50D79E339D3721CEB3E94ADBE1229CF && \
-    apt-get update && \
-    apt-get install azure-cli && \
-    apt-get clean all
+RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
 # install img
 RUN curl -fSL "https://github.com/genuinetools/img/releases/download/v0.5.6/img-linux-amd64" -o "/usr/local/bin/img" \
