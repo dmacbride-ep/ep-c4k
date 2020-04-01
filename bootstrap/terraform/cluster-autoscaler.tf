@@ -195,7 +195,7 @@ resource "kubernetes_deployment" "cluster-autoscaler" {
       spec {
         service_account_name = "cluster-autoscaler"
         container {
-          image = "k8s.gcr.io/cluster-autoscaler:v${data.external.cluster_autoscaler_version[0].result["cluster_autoscaler_version"]}"
+          image = "us.gcr.io/k8s-artifacts-prod/autoscaling/cluster-autoscaler:v${data.external.cluster_autoscaler_version[0].result["cluster_autoscaler_version"]}"
           name  = "cluster-autoscaler"
           resources {
             limits {
